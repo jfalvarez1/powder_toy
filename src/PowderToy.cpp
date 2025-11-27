@@ -350,6 +350,29 @@ int Main(int argc, char *argv[])
 	// Initialize multithreading based on preference (must be before any ThreadPool use)
 	ThreadPool::SetEnabled(prefs.Get("Simulation.Multithreading", true));
 
+	// Set performance profile for multithreading
+	// 0 = Auto, 1 = Conservative, 2 = Balanced, 3 = HighPerformance, 4 = Extreme
+	int perfProfile = prefs.Get("Simulation.PerformanceProfile", 0);
+	switch (perfProfile)
+	{
+	case 1:
+		ThreadPool::SetPerformanceProfile(PerformanceProfile::Conservative);
+		break;
+	case 2:
+		ThreadPool::SetPerformanceProfile(PerformanceProfile::Balanced);
+		break;
+	case 3:
+		ThreadPool::SetPerformanceProfile(PerformanceProfile::HighPerformance);
+		break;
+	case 4:
+		ThreadPool::SetPerformanceProfile(PerformanceProfile::Extreme);
+		break;
+	case 0:
+	default:
+		ThreadPool::SetPerformanceProfile(PerformanceProfile::Auto);
+		break;
+	}
+
 	WindowFrameOps windowFrameOps{
 		prefs.Get("Scale", 1),
 		prefs.Get("Resizable", false),
