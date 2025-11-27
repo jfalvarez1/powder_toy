@@ -27,4 +27,11 @@ public:
 	void Invert();
 	void ApproximateBlockAirMaps();
 	Air(Simulation & sim);
+
+private:
+	// Parallel helper methods
+	void update_airh_row(int y);
+	void update_air_pressure_row(int y);
+	void update_air_velocity_row(int y);
+	void update_air_main_row(int y);
 };

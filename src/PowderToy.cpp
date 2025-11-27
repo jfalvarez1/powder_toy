@@ -2,6 +2,7 @@
 #include "Format.h"
 #include "X86KillDenormals.h"
 #include "prefs/GlobalPrefs.h"
+#include "common/ThreadPool.h"
 #include "client/Client.h"
 #include "client/GameSave.h"
 #include "client/SaveFile.h"
@@ -345,6 +346,9 @@ int Main(int argc, char *argv[])
 	explicitSingletons->globalPrefs = std::make_unique<GlobalPrefs>();
 
 	auto &prefs = GlobalPrefs::Ref();
+
+	// Initialize multithreading based on preference (must be before any ThreadPool use)
+	ThreadPool::SetEnabled(prefs.Get("Simulation.Multithreading", true));
 
 	WindowFrameOps windowFrameOps{
 		prefs.Get("Scale", 1),
