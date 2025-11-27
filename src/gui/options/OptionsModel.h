@@ -36,6 +36,8 @@ public:
 	void SetTemperatureScale(TempScale temperatureScale);
 	int GetThreadedRendering();
 	void SetThreadedRendering(bool newThreadedRendering);
+	int GetPerformanceProfile();
+	void SetPerformanceProfile(int profile);
 	int GetGravityMode();
 	void SetGravityMode(int gravityMode);
 	float GetCustomGravityX();

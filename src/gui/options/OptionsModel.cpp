@@ -1,5 +1,6 @@
 #include "OptionsModel.h"
 #include "OptionsView.h"
+#include "common/ThreadPool.h"
 #include "simulation/Simulation.h"
 #include "simulation/Air.h"
 #include "simulation/gravity/Gravity.h"
@@ -105,6 +106,19 @@ void OptionsModel::SetThreadedRendering(bool newThreadedRendering)
 {
 	GlobalPrefs::Ref().Set("Renderer.SeparateThread", newThreadedRendering);
 	gModel->SetThreadedRendering(newThreadedRendering);
+	notifySettingsChanged();
+}
+
+int OptionsModel::GetPerformanceProfile()
+{
+	return static_cast<int>(ThreadPool::GetPerformanceProfile());
+}
+
+void OptionsModel::SetPerformanceProfile(int profile)
+{
+	GlobalPrefs::Ref().Set("Simulation.PerformanceProfile", profile);
+	// Note: ThreadPool profile can only be set before initialization,
+	// so this will take effect on next application restart
 	notifySettingsChanged();
 }
 

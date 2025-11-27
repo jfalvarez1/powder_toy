@@ -45,6 +45,7 @@ class OptionsView: public ui::Window
 	ui::Checkbox *graveExitsConsole{};
 	ui::Checkbox *nativeClipoard{};
 	ui::Checkbox *threadedRendering{};
+	ui::DropDown *performanceProfile{};
 	ui::Checkbox *redirectStd{};
 	ui::Checkbox *autoStartupRequest{};
 	ui::Label *startupRequestStatus{};

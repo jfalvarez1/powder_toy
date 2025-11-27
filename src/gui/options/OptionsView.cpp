@@ -2,6 +2,7 @@
 #include "Format.h"
 #include "OptionsController.h"
 #include "OptionsModel.h"
+#include "common/ThreadPool.h"
 #include "common/clipboard/Clipboard.h"
 #include "common/platform/Platform.h"
 #include "graphics/Graphics.h"
@@ -331,6 +332,15 @@ OptionsView::OptionsView() : ui::Window(ui::Point(-1, -1), ui::Point(320, 340))
 	threadedRendering = addCheckbox(0, "Separate rendering thread", "May increase framerate when fancy effects are in use", [this] {
 		c->SetThreadedRendering(threadedRendering->GetChecked());
 	});
+	performanceProfile = addDropDown("Simulation threading (restart required)", {
+		{ "Auto", 0 },
+		{ "Conservative (4 threads)", 1 },
+		{ "Balanced (half threads)", 2 },
+		{ "High Performance (all threads)", 3 },
+		{ "Extreme (16+ cores)", 4 },
+	}, [this] {
+		c->SetPerformanceProfile(performanceProfile->GetOption().second);
+	});
 	decoSpace = addDropDown("Colour space used by decoration tools", {
 		{ "sRGB", DECOSPACE_SRGB },
 		{ "Linear", DECOSPACE_LINEAR },
@@ -633,6 +643,7 @@ void OptionsView::NotifySettingsChanged(OptionsModel * sender)
 	perfectCircle->SetChecked(sender->GetPerfectCircle());
 	graveExitsConsole->SetChecked(sender->GetGraveExitsConsole());
 	threadedRendering->SetChecked(sender->GetThreadedRendering());
+	performanceProfile->SetOption(sender->GetPerformanceProfile());
 	momentumScroll->SetChecked(sender->GetMomentumScroll());
 	redirectStd->SetChecked(sender->GetRedirectStd());
 	autoStartupRequest->SetChecked(sender->GetAutoStartupRequest());

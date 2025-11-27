@@ -82,6 +82,11 @@ void OptionsController::SetThreadedRendering(bool newThreadedRendering)
 	model->SetThreadedRendering(newThreadedRendering);
 }
 
+void OptionsController::SetPerformanceProfile(int profile)
+{
+	model->SetPerformanceProfile(profile);
+}
+
 void OptionsController::SetFullscreen(bool fullscreen)
 {
 	model->SetFullscreen(fullscreen);

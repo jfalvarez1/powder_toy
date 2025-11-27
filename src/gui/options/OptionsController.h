@@ -27,6 +27,7 @@ public:
 	void SetEdgeMode(int edgeMode);
 	void SetTemperatureScale(TempScale temperatureScale);
 	void SetThreadedRendering(bool newThreadedRendering);
+	void SetPerformanceProfile(int profile);
 	void SetFullscreen(bool fullscreen);
 	void SetChangeResolution(bool newChangeResolution);
 	void SetForceIntegerScaling(bool forceIntegerScaling);
