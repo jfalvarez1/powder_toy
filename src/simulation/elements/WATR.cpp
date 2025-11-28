@@ -48,6 +48,10 @@ void Element::Element_WATR()
 
 static int update(UPDATE_FUNC_ARGS)
 {
+	// Precompute velocity magnitude once for erosion checks
+	float velocityMag = fabsf(parts[i].vx) + fabsf(parts[i].vy);
+	bool canErode = velocityMag >= 0.5f;
+
 	for (auto rx = -1; rx <= 1; rx++)
 	{
 		for (auto ry = -1; ry <= 1; ry++)
@@ -57,38 +61,57 @@ static int update(UPDATE_FUNC_ARGS)
 				auto r = pmap[y+ry][x+rx];
 				if (!r)
 					continue;
-				if (TYP(r)==PT_SALT && sim->rng.chance(1, 50))
+				auto rt = TYP(r);
+				// Use switch for faster type dispatch
+				switch (rt)
 				{
-					sim->part_change_type(i,x,y,PT_SLTW);
-					// on average, convert 3 WATR to SLTW before SALT turns into SLTW
-					if (sim->rng.chance(1, 3))
-						sim->part_change_type(ID(r),x+rx,y+ry,PT_SLTW);
-				}
-				else if ((TYP(r)==PT_RBDM||TYP(r)==PT_LRBD) && (sim->legacy_enable||parts[i].temp>(273.15f+12.0f)) && sim->rng.chance(1, 100))
-				{
-					sim->part_change_type(i,x,y,PT_FIRE);
-					parts[i].life = 4;
-					parts[i].ctype = PT_WATR;
-				}
-				else if (TYP(r)==PT_FIRE && parts[ID(r)].ctype!=PT_WATR)
-				{
-					sim->kill_part(ID(r));
-					if (sim->rng.chance(1, 30))
+				case PT_SALT:
+					if (sim->rng.chance(1, 50))
 					{
-						sim->kill_part(i);
-						return 1;
+						sim->part_change_type(i,x,y,PT_SLTW);
+						// on average, convert 3 WATR to SLTW before SALT turns into SLTW
+						if (sim->rng.chance(1, 3))
+							sim->part_change_type(ID(r),x+rx,y+ry,PT_SLTW);
 					}
-				}
-				else if (TYP(r)==PT_SLTW && sim->rng.chance(1, 2000))
-				{
-					sim->part_change_type(i,x,y,PT_SLTW);
-				}
-				else if (TYP(r)==PT_ROCK && fabs(parts[i].vx)+fabs(parts[i].vy) >= 0.5 && sim->rng.chance(1, 1000)) // ROCK erosion
-				{
-					if (sim->rng.chance(1,3))
-						sim->part_change_type(ID(r),x+rx,y+ry,PT_SAND);
-					else
-						sim->part_change_type(ID(r),x+rx,y+ry,PT_STNE);
+					break;
+				case PT_RBDM:
+				case PT_LRBD:
+					if ((sim->legacy_enable || parts[i].temp > (273.15f+12.0f)) && sim->rng.chance(1, 100))
+					{
+						sim->part_change_type(i,x,y,PT_FIRE);
+						parts[i].life = 4;
+						parts[i].ctype = PT_WATR;
+					}
+					break;
+				case PT_FIRE:
+					if (parts[ID(r)].ctype != PT_WATR)
+					{
+						sim->kill_part(ID(r));
+						if (sim->rng.chance(1, 30))
+						{
+							sim->kill_part(i);
+							return 1;
+						}
+					}
+					break;
+				case PT_SLTW:
+					if (sim->rng.chance(1, 2000))
+					{
+						sim->part_change_type(i,x,y,PT_SLTW);
+					}
+					break;
+				case PT_ROCK:
+					// ROCK erosion - only check if water is moving fast enough
+					if (canErode && sim->rng.chance(1, 1000))
+					{
+						if (sim->rng.chance(1,3))
+							sim->part_change_type(ID(r),x+rx,y+ry,PT_SAND);
+						else
+							sim->part_change_type(ID(r),x+rx,y+ry,PT_STNE);
+					}
+					break;
+				default:
+					break;
 				}
 			}
 		}

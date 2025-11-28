@@ -4556,6 +4556,9 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 	}
 	else
 	{
+		// Cache element collision factor for faster access
+		auto collision = elements[t].Collision;
+
 		// Checking stagnant is cool, but then it doesn't update when you change it later.
 		if (water_equal_test && elements[t].Falldown == 2 && rng.chance(1, 200))
 		{
@@ -4569,21 +4572,27 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 				return;
 			if (fin_x!=x && do_move(i, x, y, fin_xf, clear_yf))
 			{
-				parts[i].vx *= elements[t].Collision;
-				parts[i].vy *= elements[t].Collision;
+				parts[i].vx *= collision;
+				parts[i].vy *= collision;
 			}
 			else if (fin_y!=y && do_move(i, x, y, clear_xf, fin_yf))
 			{
-				parts[i].vx *= elements[t].Collision;
-				parts[i].vy *= elements[t].Collision;
+				parts[i].vx *= collision;
+				parts[i].vy *= collision;
 			}
 			else
 			{
 				auto pGravX = neighbourhood.pGravX;
 				auto pGravY = neighbourhood.pGravY;
 				auto r = rng.between(0, 1) * 2 - 1;// position search direction (left/right first)
+
+				// Pre-compute velocity magnitude for faster checks
+				auto absVx = fabsf(parts[i].vx);
+				auto absVy = fabsf(parts[i].vy);
+				bool hasSignificantVelocity = absVx > 0.01f || absVy > 0.01f;
+
 				if ((clear_x!=x || clear_y!=y || neighbourhood.nt || neighbourhood.surround_space) &&
-					(fabsf(parts[i].vx)>0.01f || fabsf(parts[i].vy)>0.01f))
+					hasSignificantVelocity)
 				{
 					// allow diagonal movement if target position is blocked
 					// but no point trying this if particle is stuck in a block of identical particles
@@ -4595,8 +4604,8 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 					dy /= mv;
 					if (do_move(i, x, y, clear_xf+dx, clear_yf+dy))
 					{
-						parts[i].vx *= elements[t].Collision;
-						parts[i].vy *= elements[t].Collision;
+						parts[i].vx *= collision;
+						parts[i].vy *= collision;
 						return;
 					}
 					{
@@ -4606,12 +4615,12 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 					}
 					if (do_move(i, x, y, clear_xf+dx, clear_yf+dy))
 					{
-						parts[i].vx *= elements[t].Collision;
-						parts[i].vy *= elements[t].Collision;
+						parts[i].vx *= collision;
+						parts[i].vy *= collision;
 						return;
 					}
 				}
-				if (elements[t].Falldown>1 && !grav && gravityMode==GRAV_VERTICAL && parts[i].vy>fabsf(parts[i].vx))
+				if (elements[t].Falldown>1 && !grav && gravityMode==GRAV_VERTICAL && parts[i].vy>absVx)
 				{
 					auto s = 0;
 					// stagnant is true if FLAG_STAGNANT was set for this particle in previous frame
@@ -4624,42 +4633,53 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 					if (t==PT_GEL)
 						rt = int(parts[i].tmp*0.20f+5.0f);
 
+					// Pre-calculate cell coordinates for bmap lookups
+					auto fin_y_cell = fin_y / CELL;
+					auto clear_y_cell = clear_y / CELL;
+
 					auto nx = -1, ny = -1;
 					for (auto j=clear_x+r; j>=0 && j>=clear_x-rt && j<clear_x+rt && j<XRES; j+=r)
 					{
-						if ((TYP(pmap[fin_y][j])!=t || bmap[fin_y/CELL][j/CELL])
+						auto j_cell = j / CELL;
+						if ((TYP(pmap[fin_y][j])!=t || bmap[fin_y_cell][j_cell])
 							&& (s=do_move(i, x, y, (float)j, fin_yf)))
 						{
 							nx = (int)(parts[i].x+0.5f);
 							ny = (int)(parts[i].y+0.5f);
 							break;
 						}
-						if (fin_y!=clear_y && (TYP(pmap[clear_y][j])!=t || bmap[clear_y/CELL][j/CELL])
+						if (fin_y!=clear_y && (TYP(pmap[clear_y][j])!=t || bmap[clear_y_cell][j_cell])
 							&& (s=do_move(i, x, y, (float)j, clear_yf)))
 						{
 							nx = (int)(parts[i].x+0.5f);
 							ny = (int)(parts[i].y+0.5f);
 							break;
 						}
-						if (TYP(pmap[clear_y][j])!=t || (bmap[clear_y/CELL][j/CELL] && bmap[clear_y/CELL][j/CELL]!=WL_STREAM))
+						auto bmap_val = bmap[clear_y_cell][j_cell];
+						if (TYP(pmap[clear_y][j])!=t || (bmap_val && bmap_val!=WL_STREAM))
 							break;
 					}
 
 					r = (parts[i].vy>0) ? 1 : -1;
 
 					if (s==1)
+					{
+						auto nx_cell = nx / CELL;
 						for (auto j=ny+r; j>=0 && j<YRES && j>=ny-rt && j<ny+rt; j+=r)
 						{
-							if ((TYP(pmap[j][nx])!=t || bmap[j/CELL][nx/CELL]) && do_move(i, nx, ny, (float)nx, (float)j))
+							auto j_cell = j / CELL;
+							auto bmap_val = bmap[j_cell][nx_cell];
+							if ((TYP(pmap[j][nx])!=t || bmap_val) && do_move(i, nx, ny, (float)nx, (float)j))
 								break;
-							if (TYP(pmap[j][nx])!=t || (bmap[j/CELL][nx/CELL] && bmap[j/CELL][nx/CELL]!=WL_STREAM))
+							if (TYP(pmap[j][nx])!=t || (bmap_val && bmap_val!=WL_STREAM))
 								break;
 						}
+					}
 					else if (s==-1) {} // particle is out of bounds
 					else if ((clear_x!=x||clear_y!=y) && do_move(i, x, y, clear_xf, clear_yf)) {}
 					else parts[i].flags |= FLAG_STAGNANT;
-					parts[i].vx *= elements[t].Collision;
-					parts[i].vy *= elements[t].Collision;
+					parts[i].vx *= collision;
+					parts[i].vy *= collision;
 				}
 				else if (elements[t].Falldown>1 && fabsf(pGravX*parts[i].vx+pGravY*parts[i].vy)>fabsf(pGravY*parts[i].vx-pGravX*parts[i].vy))
 				{
@@ -4707,7 +4727,9 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 						ny = (int)(nyf+0.5f);
 						if (nx<0 || ny<0 || nx>=XRES || ny >=YRES)
 							break;
-						if (TYP(pmap[ny][nx])!=t || bmap[ny/CELL][nx/CELL])
+						// Cache bmap lookup
+						auto bmap_val = bmap[ny/CELL][nx/CELL];
+						if (TYP(pmap[ny][nx])!=t || bmap_val)
 						{
 							s = do_move(i, x, y, nxf, nyf);
 							if (s)
@@ -4718,7 +4740,7 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 								break;
 							}
 							// A particle of a different type, or a wall, was found. Stop trying to move any further horizontally unless the wall should be completely invisible to particles.
-							if (TYP(pmap[ny][nx])!=t || bmap[ny/CELL][nx/CELL]!=WL_STREAM)
+							if (TYP(pmap[ny][nx])!=t || bmap_val!=WL_STREAM)
 								break;
 						}
 					}
@@ -4744,11 +4766,13 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 							ny = (int)(nyf+0.5f);
 							if (nx<0 || ny<0 || nx>=XRES || ny>=YRES)
 								break;
+							// Cache bmap lookup
+							auto bmap_val = bmap[ny/CELL][nx/CELL];
 							// If the space is anything except the same element (a wall, empty space, or occupied by a particle of a different element), try to move into it
-							if (TYP(pmap[ny][nx])!=t || bmap[ny/CELL][nx/CELL])
+							if (TYP(pmap[ny][nx])!=t || bmap_val)
 							{
 								s = do_move(i, clear_x, clear_y, nxf, nyf);
-								if (s || TYP(pmap[ny][nx])!=t || bmap[ny/CELL][nx/CELL]!=WL_STREAM)
+								if (s || TYP(pmap[ny][nx])!=t || bmap_val!=WL_STREAM)
 									break; // found the edge of the liquid and movement into it succeeded, so stop moving down
 							}
 						}
@@ -4756,16 +4780,16 @@ void Simulation::MovementPhase(int i, Neighbourhood neighbourhood)
 					else if (s==-1) {} // particle is out of bounds
 					else if ((clear_x!=x||clear_y!=y) && do_move(i, x, y, clear_xf, clear_yf)) {} // try moving to the last clear position
 					else parts[i].flags |= FLAG_STAGNANT;
-					parts[i].vx *= elements[t].Collision;
-					parts[i].vy *= elements[t].Collision;
+					parts[i].vx *= collision;
+					parts[i].vy *= collision;
 				}
 				else
 				{
 					// if interpolation was done, try moving to last clear position
 					if ((clear_x!=x||clear_y!=y) && do_move(i, x, y, clear_xf, clear_yf)) {}
 					else parts[i].flags |= FLAG_STAGNANT;
-					parts[i].vx *= elements[t].Collision;
-					parts[i].vy *= elements[t].Collision;
+					parts[i].vx *= collision;
+					parts[i].vy *= collision;
 				}
 			}
 		}
