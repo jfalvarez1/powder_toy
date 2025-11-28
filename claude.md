@@ -71,6 +71,23 @@ explicitSingletons->simulationData = std::make_unique<SimulationData>();
 explicitSingletons->saveRenderer = std::make_unique<SaveRenderer>();
 ```
 
+### 5. Fluid Physics Optimizations
+
+Optimized water, lava, and other fluid simulations for better performance:
+
+#### WATR.cpp Optimizations
+- Converted if-else chain to switch statement for faster type dispatch
+- Pre-compute velocity magnitude once for erosion checks (avoids repeated `fabs` calls)
+- Only check erosion condition when water is moving fast enough
+
+#### MovementPhase Liquid Optimizations (`Simulation.cpp`)
+- Cache element collision factor to avoid repeated `elements[t].Collision` lookups
+- Pre-compute absolute velocity values once per particle
+- Cache bmap cell coordinates to reduce division operations in spreading loops
+- Cache bmap values to avoid redundant array lookups in horizontal/vertical spreading
+
+These optimizations reduce CPU overhead in the hot path for liquid particle physics, particularly for large bodies of water or lava.
+
 ## Key Technical Concepts
 
 ### Phase Transitions in TPT
