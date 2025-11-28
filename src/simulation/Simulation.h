@@ -268,6 +268,8 @@ public:
 	void ProcessPendingKills(); // Process deferred particle kills
 	void ParallelPhysicsPass(int start, int end, int threadId); // Parallel physics pass
 	void SequentialElementPass(); // Sequential element callback pass
+	void TileBasedParallelUpdate(); // Tile-based spatial processing with empty tile skipping
+	void ProcessTilePhysics(int tileIdx, int threadId); // Physics pass for a single tile
 	void SimulateGoL();
 	void RecalcFreeParticles(bool do_life_dec);
 	void CheckStacking();
