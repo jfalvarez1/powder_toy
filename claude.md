@@ -88,6 +88,80 @@ Optimized water, lava, and other fluid simulations for better performance:
 
 These optimizations reduce CPU overhead in the hot path for liquid particle physics, particularly for large bodies of water or lava.
 
+### 6. New Interactive Elements
+
+Added 8 new elements with unique behaviors and interactions:
+
+| Element | Menu | Description |
+|---------|------|-------------|
+| **CRYO** | Liquid | Cryogenic liquid (-253°C) that flash-freezes liquids and gases on contact |
+| **BLTZ** | Elec | Ball lightning - floats erratically, zaps conductors, explodes in water |
+| **SLIM** | Liquid | Sticky slime that traps/slows particles, feeds on plants, grows from yeast |
+| **XTLG** | Special | Living crystal that grows by consuming minerals, changes color, emits light |
+| **STCL** | Gas | Storm cloud that produces rain, snow, and lightning strikes |
+| **NANO** | Special | Nanobots that consume metal, self-replicate, controlled by electricity |
+| **FRFL** | Liquid | Ferrofluid (magnetic liquid) attracted to iron and electrical fields |
+| **PLZM** | Nuclear | Plasma ball - extremely hot, emits radiation, triggers fusion reactions |
+
+#### Key Interactions
+
+**CRYO (Cryogenic Liquid)**
+- Freezes WATR/DSTW/SLTW → ICEI instantly
+- Freezes WTRV/FOG → SNOW
+- Liquefies O2 → LO2, N2 → LNTG
+- Solidifies LAVA rapidly
+- Extinguishes FIRE/PLSM
+
+**BLTZ (Ball Lightning)**
+- Attracted to metals (METL, IRON, BMTL)
+- Sparks conductors and creates THDR arcs
+- Explodes on contact with water (steam + thunder)
+- Emits PHOT and ELEC particles
+- Ignites flammable materials
+
+**SLIM (Slime)**
+- Slows down any particle it touches
+- Dissolves in water, killed by salt
+- Grows when touching ACID or YEST
+- Feeds on PLNT (grows more slime)
+- Slowly damages stickmen
+
+**XTLG (Living Crystal)**
+- Consumes SAND/STNE/GLAS/QRTZ/DMND to grow
+- Spreads to empty spaces when mature
+- Color cycles through spectrum
+- Emits colored PHOT when fully grown
+- Dissolved by water, destroyed by acid
+
+**STCL (Storm Cloud)**
+- Absorbs WTRV and WATR to grow
+- Produces rain (WATR) when mature
+- Builds electrical charge over time
+- Strikes metals with THDR lightning
+- Very cold clouds produce SNOW instead
+
+**NANO (Nanobots)**
+- Dormant without power, activated by SPRK
+- Consumes metals (METL, IRON, TTAN, GOLD, etc.)
+- Self-replicates when enough metal consumed
+- Shares energy between nearby nanobots
+- Damaged by water, destroyed by acid and heat
+
+**FRFL (Ferrofluid)**
+- Strongly attracted to IRON
+- Attracted to all metals and SPRK
+- Electromagnetic effect from electricity
+- Freezes → IRON, boils → BRMT
+- Can discharge static electricity
+
+**PLZM (Plasma Ball)**
+- Extremely hot (8000°C), floats
+- Emits PHOT (colored light) and NEUT
+- Vaporizes water instantly
+- Triggers fusion with DEUT
+- Triggers fission in URAN/PLUT
+- Melts metals rapidly
+
 ## Key Technical Concepts
 
 ### Phase Transitions in TPT
