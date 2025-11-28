@@ -39,10 +39,12 @@ void Element::Element_ACID()
 	LowPressureTransition = NT;
 	HighPressure = IPH;
 	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Concentrated acids freeze around -40C (233K)
+	LowTemperature = 233.0f;
+	LowTemperatureTransition = PT_AICD;
+	// Concentrated acids boil around 337C (610K)
+	HighTemperature = 610.0f;
+	HighTemperatureTransition = PT_ACDV;
 
 	DefaultProperties.life = 75;
 

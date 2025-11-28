@@ -200,6 +200,11 @@ simulation_elem_names = [
 	'MRCV',
 	'DICE',
 	'DTRV',
+	'RKVP',
+	'AICD',
+	'ACDV',
+	'FGEL',
+	'ISVP',
 ]
 
 simulation_elem_src = []

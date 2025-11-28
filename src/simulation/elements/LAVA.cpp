@@ -44,8 +44,9 @@ void Element::Element_LAVA()
 	HighPressureTransition = NT;
 	LowTemperature = MAX_TEMP;// check for lava solidification at all temperatures
 	LowTemperatureTransition = ST;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Rock/minerals vaporize at extreme temperatures (~3500K)
+	HighTemperature = 3500.0f;
+	HighTemperatureTransition = PT_RKVP;
 
 	Update = &Element_FIRE_update;
 	Graphics = &graphics;

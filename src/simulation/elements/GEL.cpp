@@ -39,10 +39,12 @@ void Element::Element_GEL()
 	LowPressureTransition = NT;
 	HighPressure = IPH;
 	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Gel is water-based, freezes slightly below water freezing point
+	LowTemperature = 263.0f;
+	LowTemperatureTransition = PT_FGEL;
+	// Gel decomposes/evaporates to water vapor at high temperature
+	HighTemperature = 373.0f;
+	HighTemperatureTransition = PT_WTRV;
 
 	Update = &update;
 	Graphics = &graphics;

@@ -40,8 +40,9 @@ void Element::Element_ISOZ()
 	HighPressureTransition = NT;
 	LowTemperature = 160.0f;
 	LowTemperatureTransition = PT_ISZS;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Isotope-Z boils at ~400K (fictional)
+	HighTemperature = 400.0f;
+	HighTemperatureTransition = PT_ISVP;
 
 	Update = &update;
 }
