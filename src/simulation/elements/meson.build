@@ -205,6 +205,14 @@ simulation_elem_names = [
 	'ACDV',
 	'FGEL',
 	'ISVP',
+	'CRYO',
+	'BLTZ',
+	'SLIM',
+	'XTLG',
+	'STCL',
+	'NANO',
+	'FRFL',
+	'PLZM',
 ]
 
 simulation_elem_src = []
