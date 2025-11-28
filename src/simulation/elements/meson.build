@@ -263,6 +263,20 @@ simulation_elem_names = [
 	'QAKE',
 	'SONC',
 	'MLTR',
+	'TRNS',
+	'PTRN',
+	'RESI',
+	'CAPA',
+	'INDC',
+	'DIOD',
+	'ZEND',
+	'LEDS',
+	'VCCS',
+	'GRND',
+	'SGNL',
+	'OPAM',
+	'POTM',
+	'RLAY',
 ]
 
 simulation_elem_src = []
