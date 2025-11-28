@@ -33,7 +33,7 @@ void Element::Element_RESI()
 	DefaultProperties.tmp = 50;   // Resistance value (1-100, higher = more resistance)
 	DefaultProperties.tmp2 = 0;   // Current flowing through
 	DefaultProperties.life = 0;   // Spark delay counter
-	HeatConduct = 50;
+	HeatConduct = 150;  // Good heat conduction to dissipate
 	Description = "Resistor. Limits current flow and delays spark propagation. Tmp sets resistance (1-100).";
 
 	Properties = TYPE_SOLID;
@@ -44,7 +44,7 @@ void Element::Element_RESI()
 	HighPressureTransition = NT;
 	LowTemperature = ITL;
 	LowTemperatureTransition = NT;
-	HighTemperature = 600.0f;
+	HighTemperature = 1500.0f;  // Much more heat resistant
 	HighTemperatureTransition = PT_FIRE;
 
 	Update = &update;
@@ -144,11 +144,21 @@ static int update(UPDATE_FUNC_ARGS)
 		parts[i].life = resistance / 10 + 1;  // Delay based on resistance
 	}
 
-	// Heat dissipation (P = I^2 * R)
+	// Heat dissipation (P = I^2 * R) - but very gradual
 	if (parts[i].tmp2 > 0)
 	{
-		float power = (parts[i].tmp2 * parts[i].tmp2 * resistance) / 100000.0f;
-		parts[i].temp += power;
+		// Only heat up occasionally, not every frame
+		if (sim->rng.chance(1, 20))
+		{
+			float power = (parts[i].tmp2 * resistance) / 50000.0f;
+			parts[i].temp += power;
+		}
+	}
+
+	// Natural cooling toward ambient
+	if (parts[i].temp > R_TEMP + 273.15f)
+	{
+		parts[i].temp -= 0.1f;
 	}
 
 	return 0;

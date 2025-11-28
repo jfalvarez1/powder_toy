@@ -58,13 +58,16 @@ static int update(UPDATE_FUNC_ARGS)
 	if (voltage > 100) voltage = 100;
 	parts[i].tmp = voltage;
 
-	// Continuously output power
+	// Output power periodically (not every frame to avoid overheating)
 	parts[i].life++;
-	if (parts[i].life > 2)
+	int outputInterval = 10 - voltage / 15;  // Higher voltage = slightly faster (but still slow)
+	if (outputInterval < 5) outputInterval = 5;
+
+	if (parts[i].life > outputInterval)
 	{
 		parts[i].life = 0;
 
-		// Output spark to adjacent conductors
+		// Output spark to adjacent conductors (wires only, not directly to components)
 		for (auto rx = -1; rx <= 1; rx++)
 		{
 			for (auto ry = -1; ry <= 1; ry++)
@@ -77,19 +80,14 @@ static int update(UPDATE_FUNC_ARGS)
 						auto rt = TYP(r);
 						auto rID = ID(r);
 
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
-						     rt == PT_NSCN || rt == PT_RESI || rt == PT_TRNS ||
-						     rt == PT_PTRN || rt == PT_CAPA || rt == PT_INDC)
+						// Only output to basic conductors - let them carry to components
+						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN)
 						    && parts[rID].life == 0)
 						{
-							// Higher voltage = more reliable output
-							if (sim->rng.chance(voltage, 100))
-							{
-								sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
-								parts[rID].ctype = rt;
-								parts[rID].life = 4;
-								parts[i].tmp2++;
-							}
+							sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
+							parts[rID].ctype = rt;
+							parts[rID].life = 4;
+							parts[i].tmp2++;
 						}
 					}
 				}
