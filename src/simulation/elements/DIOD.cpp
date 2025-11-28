@@ -7,7 +7,7 @@ void Element::Element_DIOD()
 {
 	Identifier = "DEFAULT_PT_DIOD";
 	Name = "DIOD";
-	Colour = 0x202020_rgb;
+	Colour = 0x303030_rgb;
 	MenuVisible = 1;
 	MenuSection = SC_ELEC;
 	Enabled = 1;
@@ -30,13 +30,13 @@ void Element::Element_DIOD()
 	Weight = 100;
 
 	DefaultProperties.temp = R_TEMP + 273.15f;
-	DefaultProperties.tmp = 0;   // Direction: 0=right, 1=down, 2=left, 3=up
-	DefaultProperties.tmp2 = 0;  // Current flowing
-	DefaultProperties.life = 0;  // Conducting state
+	DefaultProperties.tmp = 0;   // Forward current detected
+	DefaultProperties.tmp2 = 0;  // Reverse current detected (blocked)
+	DefaultProperties.life = 0;  // Cooldown timer
 	HeatConduct = 251;
-	Description = "Diode. Only allows current flow in one direction (right by default). Tmp sets direction.";
+	Description = "Diode. Current flows PSCN->DIOD->NSCN only. Blocks reverse flow.";
 
-	Properties = TYPE_SOLID;
+	Properties = TYPE_SOLID | PROP_LIFE_DEC;
 
 	LowPressure = IPL;
 	LowPressureTransition = NT;
@@ -53,24 +53,20 @@ void Element::Element_DIOD()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	int direction = parts[i].tmp % 4;
-	if (direction < 0) direction = 0;
+	/*
+	 * Diode - uses WIRE TYPES for direction:
+	 *
+	 *   PSCN ---[DIOD]---> NSCN/METL
+	 *   (anode)            (cathode)
+	 *
+	 * Current flows from PSCN (anode) to NSCN/METL (cathode).
+	 * Reverse direction (NSCN to PSCN) is blocked.
+	 */
 
-	// Direction offsets
-	int dx = 0, dy = 0;
-	int inputDx = 0, inputDy = 0;
-	switch (direction)
-	{
-		case 0: dx = 1; dy = 0; inputDx = -1; inputDy = 0; break;  // Right
-		case 1: dx = 0; dy = 1; inputDx = 0; inputDy = -1; break;  // Down
-		case 2: dx = -1; dy = 0; inputDx = 1; inputDy = 0; break;  // Left
-		case 3: dx = 0; dy = -1; inputDx = 0; inputDy = 1; break;  // Up
-	}
+	bool forwardInput = false;    // PSCN sparked = forward bias
+	bool reverseInput = false;    // NSCN sparked trying to go backwards
 
-	bool forwardInput = false;
-	bool reverseInput = false;
-
-	// Check for inputs
+	// Scan adjacent particles for wire types
 	for (auto rx = -1; rx <= 1; rx++)
 	{
 		for (auto ry = -1; ry <= 1; ry++)
@@ -83,34 +79,49 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				if (rt == PT_SPRK && parts[rID].life >= 3)
+				// Sparked PSCN = forward input (anode)
+				if (rt == PT_SPRK && parts[rID].ctype == PT_PSCN)
 				{
-					// Check if input is from forward direction (anode side)
-					if (rx == inputDx && ry == inputDy)
+					forwardInput = true;
+				}
+
+				// Sparked NSCN = reverse input (blocked)
+				if (rt == PT_SPRK && parts[rID].ctype == PT_NSCN)
+				{
+					reverseInput = true;
+				}
+
+				// Sparked METL adjacent to PSCN also counts as forward
+				if (rt == PT_SPRK && parts[rID].ctype == PT_METL)
+				{
+					// Check if there's a PSCN nearby this spark
+					for (int dx = -1; dx <= 1; dx++)
 					{
-						forwardInput = true;
-					}
-					// Check if input is from reverse (cathode side) - blocked
-					else if (rx == dx && ry == dy)
-					{
-						reverseInput = true;
-					}
-					// Side inputs - allow if they're more towards input side
-					else if ((inputDx != 0 && rx == inputDx) || (inputDy != 0 && ry == inputDy))
-					{
-						forwardInput = true;
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							int nx = x + rx + dx;
+							int ny = y + ry + dy;
+							if (nx >= 0 && nx < XRES && ny >= 0 && ny < YRES)
+							{
+								auto r2 = pmap[ny][nx];
+								if (r2 && TYP(r2) == PT_PSCN)
+								{
+									forwardInput = true;
+								}
+							}
+						}
 					}
 				}
 
-				// PSCN always acts as forward input
+				// Also check adjacent PSCN for nearby sparks
 				if (rt == PT_PSCN)
 				{
-					for (int ddx = -1; ddx <= 1; ddx++)
+					for (int dx = -1; dx <= 1; dx++)
 					{
-						for (int ddy = -1; ddy <= 1; ddy++)
+						for (int dy = -1; dy <= 1; dy++)
 						{
-							int nx = x + rx + ddx;
-							int ny = y + ry + ddy;
+							int nx = x + rx + dx;
+							int ny = y + ry + dy;
 							if (nx >= 0 && nx < XRES && ny >= 0 && ny < YRES)
 							{
 								auto r2 = pmap[ny][nx];
@@ -126,44 +137,20 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	parts[i].tmp2 = forwardInput ? 100 : 0;
+	parts[i].tmp = forwardInput ? 1 : 0;
+	parts[i].tmp2 = reverseInput ? 1 : 0;
 
-	// Forward bias - conduct
+	// Forward bias - conduct to NSCN/METL/INWR
 	if (forwardInput && parts[i].life == 0)
 	{
-		parts[i].life = 4;
+		parts[i].life = 4;  // Cooldown
 
-		// Output spark in forward direction
-		int outX = x + dx;
-		int outY = y + dy;
-
-		if (outX >= 0 && outX < XRES && outY >= 0 && outY < YRES)
-		{
-			auto r = pmap[outY][outX];
-			if (r)
-			{
-				auto rt = TYP(r);
-				auto rID = ID(r);
-
-				if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
-				     rt == PT_NSCN || rt == PT_RESI || rt == PT_DIOD)
-				    && parts[rID].life == 0)
-				{
-					sim->part_change_type(rID, outX, outY, PT_SPRK);
-					parts[rID].ctype = rt;
-					parts[rID].life = 4;
-				}
-			}
-		}
-
-		// Also output to adjacent forward-direction cells
+		// Output to NSCN, METL, INWR (cathode side)
 		for (auto rx = -1; rx <= 1; rx++)
 		{
 			for (auto ry = -1; ry <= 1; ry++)
 			{
-				if ((rx == dx || (dx == 0 && rx == 0)) &&
-				    (ry == dy || (dy == 0 && ry == 0)) &&
-				    (rx || ry))
+				if (rx || ry)
 				{
 					auto r = pmap[y+ry][x+rx];
 					if (r)
@@ -171,7 +158,8 @@ static int update(UPDATE_FUNC_ARGS)
 						auto rt = TYP(r);
 						auto rID = ID(r);
 
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_NSCN)
+						// Output to NSCN, METL, or INWR
+						if ((rt == PT_NSCN || rt == PT_METL || rt == PT_INWR)
 						    && parts[rID].life == 0)
 						{
 							sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
@@ -184,16 +172,11 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	// Reverse bias - block (and heat up slightly)
+	// Reverse bias - heat up slightly (blocking)
 	if (reverseInput)
 	{
-		parts[i].temp += 0.5f;
-	}
-
-	// Decay conducting state
-	if (parts[i].life > 0)
-	{
-		parts[i].life--;
+		if (sim->rng.chance(1, 20))
+			parts[i].temp += 0.1f;
 	}
 
 	return 0;
@@ -201,36 +184,35 @@ static int update(UPDATE_FUNC_ARGS)
 
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
-	int direction = cpart->tmp % 4;
+	int forward = cpart->tmp;
+	int reverse = cpart->tmp2;
 	int conducting = cpart->life;
-	int current = cpart->tmp2;
 
-	// Dark body with stripe indicating cathode
-	*colr = 32;
-	*colg = 32;
-	*colb = 32;
+	// Dark body
+	*colr = 48;
+	*colg = 48;
+	*colb = 48;
 
-	// Conducting glow
-	if (conducting > 0)
+	// Conducting glow (forward)
+	if (conducting > 0 && forward)
 	{
-		*colr = 100;
-		*colg = 100;
-		*colb = 80;
+		*colr = 120;
+		*colg = 120;
+		*colb = 100;
 
-		*firea = 30;
+		*firea = 40;
 		*firer = 200;
 		*fireg = 200;
 		*fireb = 150;
 		*pixel_mode |= FIRE_ADD;
 	}
 
-	// Show direction with a subtle tint
-	switch (direction)
+	// Red warning when blocking reverse
+	if (reverse)
 	{
-		case 0: *colr += 20; break;  // Right - red tint
-		case 1: *colg += 20; break;  // Down - green tint
-		case 2: *colb += 20; break;  // Left - blue tint
-		case 3: *colr += 10; *colg += 10; break;  // Up - yellow tint
+		*colr = 100;
+		*colg = 40;
+		*colb = 40;
 	}
 
 	return 0;
