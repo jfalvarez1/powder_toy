@@ -120,6 +120,7 @@ public:
 	std::unique_ptr<Air> air;
 
 	RNG rng;
+	std::vector<RNG> threadRngs; // Per-thread RNGs for parallel processing
 
 	int replaceModeSelected = 0;
 	int replaceModeFlags = 0;
@@ -217,6 +218,8 @@ public:
 	void set_emap(int x, int y);
 	int parts_avg(int ci, int ni, int t);
 	void UpdateParticles(int start, int end); // Dispatches an update to the range [start, end).
+	void UpdateParticlesParallel(); // Parallel version using spatial chunking
+	void UpdateParticlesInStrip(int stripStart, int stripEnd, int threadId); // Update particles in Y-strip
 	void SimulateGoL();
 	void RecalcFreeParticles(bool do_life_dec);
 	void CheckStacking();

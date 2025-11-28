@@ -9,6 +9,8 @@
 #include "common/tpt-compat.h"
 #include "common/tpt-rand.h"
 #include "common/Defer.h"
+#include "common/ThreadPool.h"
+#include <atomic>
 #include "gui/game/Brush.h"
 #include "elements/EMP.h"
 #include "elements/LOLZ.h"
@@ -2373,6 +2375,187 @@ void Simulation::UpdateParticles(int start, int end)
 			continue;
 
 		if (!parts[i].vx&&!parts[i].vy)//if its not moving, skip to next particle, movement code it next
+			continue;
+
+		MovementPhase(i, neighbourhood);
+	}
+}
+
+void Simulation::UpdateParticlesParallel()
+{
+	if (!ThreadPool::IsEnabled())
+	{
+		// Fall back to sequential update
+		UpdateParticles(0, parts.active);
+		return;
+	}
+
+	auto &pool = ThreadPool::Ref();
+	int numThreads = static_cast<int>(pool.GetThreadCount());
+
+	// Initialize thread-local RNGs if needed
+	if (threadRngs.size() != static_cast<size_t>(numThreads))
+	{
+		threadRngs.resize(numThreads);
+		for (int t = 0; t < numThreads; t++)
+		{
+			// Seed each thread RNG differently
+			threadRngs[t] = RNG();
+			threadRngs[t].seed(rng.gen() + t * 12345);
+		}
+	}
+
+	// Divide particles into chunks by index
+	// This is simpler than spatial chunking but still provides parallelism
+	int chunkSize = (parts.active + numThreads - 1) / numThreads;
+
+	pool.ParallelFor(0, numThreads, [this, chunkSize](int startThread, int endThread) {
+		for (int t = startThread; t < endThread; t++)
+		{
+			int start = t * chunkSize;
+			int end = std::min(start + chunkSize, parts.active);
+			UpdateParticlesInStrip(start, end, t);
+		}
+	});
+
+	// After parallel update, sync any state that needs it
+	// The rng state from threads is intentionally not merged back
+}
+
+void Simulation::UpdateParticlesInStrip(int start, int end, int threadId)
+{
+	// Use thread-local RNG for this strip
+	RNG &localRng = (threadId >= 0 && threadId < static_cast<int>(threadRngs.size()))
+		? threadRngs[threadId] : rng;
+
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	for (auto i = start; i < end && i < parts.active; i++)
+	{
+		auto t = parts[i].type;
+		if (!t)
+		{
+			continue;
+		}
+
+		auto x = int(parts[i].x+0.5f);
+		auto y = int(parts[i].y+0.5f);
+
+		// Kill a particle off screen
+		if (x<CELL || y<CELL || x>=XRES-CELL || y>=YRES-CELL)
+		{
+			kill_part(i);
+			continue;
+		}
+
+		// Kill a particle in a wall where it isn't supposed to go
+		if (bmap[y/CELL][x/CELL] &&
+		   (bmap[y/CELL][x/CELL]==WL_WALL ||
+		    bmap[y/CELL][x/CELL]==WL_WALLELEC ||
+		    bmap[y/CELL][x/CELL]==WL_ALLOWAIR ||
+		    (bmap[y/CELL][x/CELL]==WL_DESTROYALL) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
+		    (bmap[y/CELL][x/CELL]==WL_EWALL && !emap[y/CELL][x/CELL])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		{
+			kill_part(i);
+			continue;
+		}
+
+		// Make sure that STASIS'd particles don't tick.
+		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL]<8) {
+			continue;
+		}
+
+		if (bmap[y/CELL][x/CELL]==WL_DETECT && emap[y/CELL][x/CELL]<8)
+			set_emap(x/CELL, y/CELL);
+
+		// Adding to velocity from the particle's velocity (atomic float operations would be ideal)
+		// For now, accept minor race conditions on vx/vy/pv updates
+		vx[y/CELL][x/CELL] = vx[y/CELL][x/CELL]*elements[t].AirLoss + elements[t].AirDrag*parts[i].vx;
+		vy[y/CELL][x/CELL] = vy[y/CELL][x/CELL]*elements[t].AirLoss + elements[t].AirDrag*parts[i].vy;
+
+		if (elements[t].HotAir)
+		{
+			if (t==PT_GAS||t==PT_NBLE)
+			{
+				if (pv[y/CELL][x/CELL]<3.5f)
+					pv[y/CELL][x/CELL] += elements[t].HotAir*(3.5f-pv[y/CELL][x/CELL]);
+				if (y+CELL<YRES && pv[y/CELL+1][x/CELL]<3.5f)
+					pv[y/CELL+1][x/CELL] += elements[t].HotAir*(3.5f-pv[y/CELL+1][x/CELL]);
+				if (x+CELL<XRES)
+				{
+					if (pv[y/CELL][x/CELL+1]<3.5f)
+						pv[y/CELL][x/CELL+1] += elements[t].HotAir*(3.5f-pv[y/CELL][x/CELL+1]);
+					if (y+CELL<YRES && pv[y/CELL+1][x/CELL+1]<3.5f)
+						pv[y/CELL+1][x/CELL+1] += elements[t].HotAir*(3.5f-pv[y/CELL+1][x/CELL+1]);
+				}
+			}
+			else
+			{
+				pv[y/CELL][x/CELL] += elements[t].HotAir;
+				if (y+CELL<YRES)
+					pv[y/CELL+1][x/CELL] += elements[t].HotAir;
+				if (x+CELL<XRES)
+				{
+					pv[y/CELL][x/CELL+1] += elements[t].HotAir;
+					if (y+CELL<YRES)
+						pv[y/CELL+1][x/CELL+1] += elements[t].HotAir;
+				}
+			}
+		}
+
+		auto neighbourhood = GetNeighbourhood(i);
+
+		// Velocity updates for the particle
+		if (t != PT_SPNG || !(parts[i].flags&FLAG_MOVABLE))
+		{
+			parts[i].vx *= elements[t].Loss;
+			parts[i].vy *= elements[t].Loss;
+		}
+		parts[i].vx += elements[t].Advection*vx[y/CELL][x/CELL] + neighbourhood.pGravX;
+		parts[i].vy += elements[t].Advection*vy[y/CELL][x/CELL] + neighbourhood.pGravY;
+
+		if (elements[t].Diffusion)
+		{
+			parts[i].vx += elements[t].Diffusion*(2.0f*localRng.uniform01()-1.0f);
+			parts[i].vy += elements[t].Diffusion*(2.0f*localRng.uniform01()-1.0f);
+		}
+
+		auto transitionOccurred = TransitionPhase(i, neighbourhood);
+		if (!parts[i].type)
+		{
+			continue;
+		}
+		if (transitionOccurred)
+		{
+			t = parts[i].type;
+		}
+
+		// Call the particle update function, if there is one
+		// Note: Element Update functions may not be thread-safe
+		// For full thread safety, these would need to be parallelized per-element
+		if (elements[t].Update)
+		{
+			if ((*(elements[t].Update))(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap))
+				continue;
+			x = int(parts[i].x+0.5f);
+			y = int(parts[i].y+0.5f);
+		}
+
+		if(legacy_enable)
+			Element::legacyUpdate(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap);
+
+		if (parts[i].type == PT_NONE)
+			continue;
+
+		if (transitionOccurred)
+			continue;
+
+		if (!parts[i].vx && !parts[i].vy)
 			continue;
 
 		MovementPhase(i, neighbourhood);

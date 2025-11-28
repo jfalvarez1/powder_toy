@@ -21,6 +21,7 @@
 #include "client/http/ExecVoteRequest.h"
 #include "common/platform/Platform.h"
 #include "common/clipboard/Clipboard.h"
+#include "common/ThreadPool.h"
 #include "graphics/Renderer.h"
 #include "simulation/Air.h"
 #include "simulation/GOLString.h"
@@ -1596,7 +1597,17 @@ void GameModel::UpdateUpTo(int upTo)
 	{
 		BeforeSim();
 	}
-	sim->UpdateParticles(sim->debug_nextToUpdate, upTo);
+
+	// Use parallel update for full simulation frames when multithreading is enabled
+	if (sim->debug_nextToUpdate == 0 && upTo >= NPART && ThreadPool::IsEnabled())
+	{
+		sim->UpdateParticlesParallel();
+	}
+	else
+	{
+		sim->UpdateParticles(sim->debug_nextToUpdate, upTo);
+	}
+
 	if (queuedFrames)
 	{
 		queuedFrames--;
