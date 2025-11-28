@@ -462,6 +462,11 @@ int Main(int argc, char *argv[])
 	std::cout << "DEBUG: Client initialized" << std::endl;
 	Client::Ref().SetRedirectStd(redirectStd);
 
+	// SimulationData must be created before SaveRenderer since Simulation constructor needs element data
+	std::cout << "DEBUG: Creating SimulationData (loading elements)" << std::endl;
+	explicitSingletons->simulationData = std::make_unique<SimulationData>();
+	std::cout << "DEBUG: SimulationData created" << std::endl;
+
 	std::cout << "DEBUG: Creating SaveRenderer" << std::endl;
 	explicitSingletons->saveRenderer = std::make_unique<SaveRenderer>();
 	std::cout << "DEBUG: Creating Favorite" << std::endl;
@@ -515,9 +520,6 @@ int Main(int argc, char *argv[])
 		X86KillDenormals();
 	}
 
-	std::cout << "DEBUG: Creating SimulationData (loading elements)" << std::endl;
-	explicitSingletons->simulationData = std::make_unique<SimulationData>();
-	std::cout << "DEBUG: SimulationData created" << std::endl;
 	std::cout << "DEBUG: Creating GameController" << std::endl;
 	explicitSingletons->gameController = std::make_unique<GameController>();
 	std::cout << "DEBUG: GameController created" << std::endl;
