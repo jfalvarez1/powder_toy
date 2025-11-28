@@ -29,7 +29,7 @@ void Element::Element_MERC()
 	Weight = 91;
 
 	HeatConduct = 251;
-	Description = "Mercury. Volume changes with temperature, Conductive.";
+	Description = "Mercury. Volume changes with temperature, Conductive. Evaporates at high temperatures.";
 
 	Properties = TYPE_LIQUID|PROP_CONDUCTS|PROP_NEUTABSORB|PROP_LIFE_DEC;
 
@@ -39,8 +39,9 @@ void Element::Element_MERC()
 	HighPressureTransition = NT;
 	LowTemperature = ITL;
 	LowTemperatureTransition = NT;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Mercury boils at ~630K (357°C)
+	HighTemperature = 629.88f;
+	HighTemperatureTransition = PT_MRCV;
 
 	DefaultProperties.tmp = 10;
 

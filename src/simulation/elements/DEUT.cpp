@@ -32,7 +32,7 @@ void Element::Element_DEUT()
 
 	DefaultProperties.temp = R_TEMP - 2.0f + 273.15f;
 	HeatConduct = 251;
-	Description = "Deuterium oxide. Gets more concentrated when cold, explodes with neutrons or protons.";
+	Description = "Deuterium oxide. Heavy water, gets more concentrated when cold, explodes with neutrons or protons.";
 
 	Properties = TYPE_LIQUID|PROP_NEUTPASS;
 
@@ -40,10 +40,12 @@ void Element::Element_DEUT()
 	LowPressureTransition = NT;
 	HighPressure = IPH;
 	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Heavy water freezes at ~276.97K (3.82°C)
+	LowTemperature = 276.97f;
+	LowTemperatureTransition = PT_DICE;
+	// Heavy water boils at ~374.5K (101.4°C)
+	HighTemperature = 374.5f;
+	HighTemperatureTransition = PT_DTRV;
 
 	DefaultProperties.life = 10;
 

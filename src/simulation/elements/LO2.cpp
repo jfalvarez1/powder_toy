@@ -28,7 +28,7 @@ void Element::Element_LO2()
 
 	DefaultProperties.temp = 80.0f;
 	HeatConduct = 70;
-	Description = "Liquid Oxygen. Very cold. Reacts with fire.";
+	Description = "Liquid Oxygen. Very cold. Reacts with fire. Freezes to solid oxygen.";
 
 	Properties = TYPE_LIQUID;
 
@@ -36,8 +36,10 @@ void Element::Element_LO2()
 	LowPressureTransition = NT;
 	HighPressure = IPH;
 	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
+	// Oxygen freezes at ~54.36K
+	LowTemperature = 54.36f;
+	LowTemperatureTransition = PT_OICE;
+	// Oxygen boils at ~90.2K
 	HighTemperature = 90.1f;
 	HighTemperatureTransition = PT_O2;
 }

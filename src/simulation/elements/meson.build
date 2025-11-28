@@ -195,6 +195,11 @@ simulation_elem_names = [
 	'RSSS',
 	'BASE',
 	'N2',
+	'OICE',
+	'LH2',
+	'MRCV',
+	'DICE',
+	'DTRV',
 ]
 
 simulation_elem_src = []

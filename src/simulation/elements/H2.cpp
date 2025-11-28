@@ -37,8 +37,9 @@ void Element::Element_H2()
 	LowPressureTransition = NT;
 	HighPressure = IPH;
 	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
+	// Hydrogen condenses at ~20.28K
+	LowTemperature = 20.28f;
+	LowTemperatureTransition = PT_LH2;
 	HighTemperature = ITH;
 	HighTemperatureTransition = NT;
 

@@ -40,8 +40,9 @@ void Element::Element_FRZW()
 	HighPressureTransition = NT;
 	LowTemperature = 53.0f;
 	LowTemperatureTransition = PT_ICEI;
-	HighTemperature = ITH;
-	HighTemperatureTransition = NT;
+	// Evaporates to water vapor at standard boiling point
+	HighTemperature = 373.0f;
+	HighTemperatureTransition = PT_WTRV;
 
 	DefaultProperties.life = 100;
 
