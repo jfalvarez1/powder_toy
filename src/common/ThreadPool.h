@@ -93,6 +93,12 @@ public:
 	// Get hardware thread count
 	static unsigned int GetHardwareThreadCount();
 
+	// Get profile name as string
+	static const char* GetProfileName(PerformanceProfile profile);
+
+	// Get status string for display (e.g., "MT: 16 threads (High Performance)")
+	static std::string GetStatusString();
+
 private:
 	static bool multithreadingEnabled;
 	static PerformanceProfile currentProfile;

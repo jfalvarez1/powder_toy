@@ -21,6 +21,7 @@
 #include "client/Client.h"
 #include "client/GameSave.h"
 #include "common/platform/Platform.h"
+#include "common/ThreadPool.h"
 #include "graphics/Graphics.h"
 #include "graphics/Renderer.h"
 #include "graphics/VideoBuffer.h"
@@ -2529,6 +2530,7 @@ void GameView::OnDraw()
 				fpsInfo << " Parts: " << rendererStats.foundParticles << "/" << sample.NumParts;
 			else
 				fpsInfo << " Parts: " << sample.NumParts;
+			fpsInfo << " [" << ByteString(ThreadPool::GetStatusString()).FromUtf8() << "]";
 		}
 		if ((std::holds_alternative<HdispLimitAuto>(rendererSettings->wantHdispLimitMin) ||
 		     std::holds_alternative<HdispLimitAuto>(rendererSettings->wantHdispLimitMax)) && rendererStats.hdispLimitValid)

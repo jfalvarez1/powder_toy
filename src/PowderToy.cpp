@@ -373,6 +373,9 @@ int Main(int argc, char *argv[])
 		break;
 	}
 
+	// Print threading status to console
+	std::cout << "Threading: " << ThreadPool::GetStatusString() << std::endl;
+
 	WindowFrameOps windowFrameOps{
 		prefs.Get("Scale", 1),
 		prefs.Get("Resizable", false),

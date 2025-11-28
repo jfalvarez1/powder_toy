@@ -1,5 +1,7 @@
 #include "ThreadPool.h"
 #include <algorithm>
+#include <string>
+#include <sstream>
 
 std::unique_ptr<ThreadPool> ThreadPool::instance;
 std::mutex ThreadPool::instanceMutex;
@@ -244,4 +246,37 @@ void ThreadPool::SetPerformanceProfile(PerformanceProfile profile)
 PerformanceProfile ThreadPool::GetPerformanceProfile()
 {
 	return currentProfile;
+}
+
+const char* ThreadPool::GetProfileName(PerformanceProfile profile)
+{
+	switch (profile)
+	{
+	case PerformanceProfile::Conservative:
+		return "Conservative";
+	case PerformanceProfile::Balanced:
+		return "Balanced";
+	case PerformanceProfile::HighPerformance:
+		return "High Performance";
+	case PerformanceProfile::Extreme:
+		return "Extreme";
+	case PerformanceProfile::Auto:
+	default:
+		return "Auto";
+	}
+}
+
+std::string ThreadPool::GetStatusString()
+{
+	std::ostringstream ss;
+	if (multithreadingEnabled)
+	{
+		size_t threads = GetThreadCountForProfile(currentProfile);
+		ss << "MT: " << threads << " threads (" << GetProfileName(currentProfile) << ")";
+	}
+	else
+	{
+		ss << "MT: Disabled (single-threaded)";
+	}
+	return ss.str();
 }
