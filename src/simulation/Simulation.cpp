@@ -5,6 +5,7 @@
 #include "gravity/Gravity.h"
 #include "ToolClasses.h"
 #include "SimulationData.h"
+#include "SimdOptimizations.h"
 #include "client/GameSave.h"
 #include "common/tpt-compat.h"
 #include "common/tpt-rand.h"
@@ -2702,8 +2703,22 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 	auto &sd = SimulationData::CRef();
 	auto &elements = sd.elements;
 
+	// SIMD batch for velocity updates
+	ParticleBatch batch;
+	batch.count = 0;
+	alignas(32) float randValues[SIMD_BATCH_SIZE * 2];
+
+	// Prefetch ahead distance
+	constexpr int PREFETCH_DISTANCE = 8;
+
 	for (int i = start; i < end; i++)
 	{
+		// Prefetch future particles
+		if (i + PREFETCH_DISTANCE < end)
+		{
+			PREFETCH_READ(&parts[i + PREFETCH_DISTANCE]);
+		}
+
 		auto t = parts[i].type;
 		if (!t)
 			continue;
@@ -2711,25 +2726,41 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 		auto x = int(parts[i].x + 0.5f);
 		auto y = int(parts[i].y + 0.5f);
 
-		// Check bounds - defer kill
-		if (x < CELL || y < CELL || x >= XRES - CELL || y >= YRES - CELL)
+		// Optimized bounds check
+		if (!IsInBounds(x, y))
 		{
 			std::lock_guard<std::mutex> lock(killPartMutex);
 			pendingKills.push_back(i);
 			continue;
 		}
 
+		int cy = FastCellCoord(y);
+		int cx = FastCellCoord(x);
+
+		// Prefetch cell data for next iteration
+		if (i + 1 < end && parts[i + 1].type)
+		{
+			int nextX = int(parts[i + 1].x + 0.5f);
+			int nextY = int(parts[i + 1].y + 0.5f);
+			int nextCy = FastCellCoord(nextY);
+			int nextCx = FastCellCoord(nextX);
+			PREFETCH_READ(&vx[nextCy][nextCx]);
+			PREFETCH_READ(&vy[nextCy][nextCx]);
+			PREFETCH_READ(&bmap[nextCy][nextCx]);
+		}
+
 		// Check walls - defer kill
-		if (bmap[y/CELL][x/CELL] &&
-		   (bmap[y/CELL][x/CELL]==WL_WALL ||
-		    bmap[y/CELL][x/CELL]==WL_WALLELEC ||
-		    bmap[y/CELL][x/CELL]==WL_ALLOWAIR ||
-		    (bmap[y/CELL][x/CELL]==WL_DESTROYALL) ||
-		    (bmap[y/CELL][x/CELL]==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
-		    (bmap[y/CELL][x/CELL]==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
-		    (bmap[y/CELL][x/CELL]==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
-		    (bmap[y/CELL][x/CELL]==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
-		    (bmap[y/CELL][x/CELL]==WL_EWALL && !emap[y/CELL][x/CELL])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		auto wallType = bmap[cy][cx];
+		if (wallType &&
+		   (wallType==WL_WALL ||
+		    wallType==WL_WALLELEC ||
+		    wallType==WL_ALLOWAIR ||
+		    (wallType==WL_DESTROYALL) ||
+		    (wallType==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
+		    (wallType==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
+		    (wallType==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
+		    (wallType==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
+		    (wallType==WL_EWALL && !emap[cy][cx])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
 		{
 			std::lock_guard<std::mutex> lock(killPartMutex);
 			pendingKills.push_back(i);
@@ -2737,11 +2768,8 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 		}
 
 		// Stasis check
-		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL] < 8)
+		if (wallType == WL_STASIS && emap[cy][cx] < 8)
 			continue;
-
-		int cy = y / CELL;
-		int cx = x / CELL;
 
 		// Accumulate cell velocity changes (thread-local, no contention)
 		if (cellBuf)
@@ -2756,55 +2784,75 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 
 			if (elements[t].HotAir)
 			{
+				float hotAir = elements[t].HotAir;
 				if (t == PT_GAS || t == PT_NBLE)
 				{
-					float contribution = elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx]);
+					float contribution = hotAir * std::max(0.0f, 3.5f - pv[cy][cx]);
 					cellBuf->dpv[cy][cx] += contribution;
 					if (cy + 1 < YCELLS)
-						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx]);
+						cellBuf->dpv[cy + 1][cx] += hotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx]);
 					if (cx + 1 < XCELLS)
 					{
-						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx + 1]);
+						cellBuf->dpv[cy][cx + 1] += hotAir * std::max(0.0f, 3.5f - pv[cy][cx + 1]);
 						if (cy + 1 < YCELLS)
-							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx + 1]);
+							cellBuf->dpv[cy + 1][cx + 1] += hotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx + 1]);
 					}
 				}
 				else
 				{
-					cellBuf->dpv[cy][cx] += elements[t].HotAir;
+					cellBuf->dpv[cy][cx] += hotAir;
 					if (cy + 1 < YCELLS)
-						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir;
+						cellBuf->dpv[cy + 1][cx] += hotAir;
 					if (cx + 1 < XCELLS)
 					{
-						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir;
+						cellBuf->dpv[cy][cx + 1] += hotAir;
 						if (cy + 1 < YCELLS)
-							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir;
+							cellBuf->dpv[cy + 1][cx + 1] += hotAir;
 					}
 				}
 			}
 		}
 
+		// Collect particle data for SIMD batch
+		int batchIdx = batch.count;
+		batch.indices[batchIdx] = i;
+		batch.vx[batchIdx] = parts[i].vx;
+		batch.vy[batchIdx] = parts[i].vy;
+		batch.loss[batchIdx] = (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE)) ? elements[t].Loss : 1.0f;
+		batch.advection[batchIdx] = elements[t].Advection;
+		batch.cellVx[batchIdx] = vx[cy][cx];
+		batch.cellVy[batchIdx] = vy[cy][cx];
+		batch.diffusion[batchIdx] = elements[t].Diffusion;
+
 		// Get gravity field
-		float pGravX = 0, pGravY = 0;
-		GetGravityField(x, y, elements[t].Gravity, elements[t].NewtonianGravity, pGravX, pGravY);
+		GetGravityField(x, y, elements[t].Gravity, elements[t].NewtonianGravity,
+		                batch.gravX[batchIdx], batch.gravY[batchIdx]);
 
-		// Apply velocity loss
-		if (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE))
+		batch.count++;
+
+		// Process batch when full
+		if (batch.count == SIMD_BATCH_SIZE)
 		{
-			parts[i].vx *= elements[t].Loss;
-			parts[i].vy *= elements[t].Loss;
+			// Generate random values for diffusion
+			for (int r = 0; r < SIMD_BATCH_SIZE * 2; r++)
+			{
+				randValues[r] = localRng.uniform01();
+			}
+
+			// Use SIMD-optimized velocity update
+			SimdUpdateVelocities(batch, parts, randValues);
+			batch.count = 0;
 		}
+	}
 
-		// Apply advection and gravity
-		parts[i].vx += elements[t].Advection * vx[cy][cx] + pGravX;
-		parts[i].vy += elements[t].Advection * vy[cy][cx] + pGravY;
-
-		// Apply diffusion
-		if (elements[t].Diffusion)
+	// Process remaining particles in batch
+	if (batch.count > 0)
+	{
+		for (int r = 0; r < batch.count * 2; r++)
 		{
-			parts[i].vx += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
-			parts[i].vy += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+			randValues[r] = localRng.uniform01();
 		}
+		SimdUpdateVelocities(batch, parts, randValues);
 	}
 }
 
@@ -2813,8 +2861,29 @@ void Simulation::SequentialElementPass()
 	auto &sd = SimulationData::CRef();
 	auto &elements = sd.elements;
 
+	// Prefetch distance for pmap lookups
+	constexpr int PREFETCH_DISTANCE = 4;
+
 	for (int i = 0; i < parts.active; i++)
 	{
+		// Prefetch future particle and its pmap neighborhood
+		if (i + PREFETCH_DISTANCE < parts.active)
+		{
+			PREFETCH_READ(&parts[i + PREFETCH_DISTANCE]);
+			if (parts[i + PREFETCH_DISTANCE].type)
+			{
+				int px = int(parts[i + PREFETCH_DISTANCE].x + 0.5f);
+				int py = int(parts[i + PREFETCH_DISTANCE].y + 0.5f);
+				if (IsInBounds(px, py))
+				{
+					// Prefetch center and one row of pmap for GetNeighbourhood
+					PREFETCH_READ(&pmap[py][px - 1]);
+					PREFETCH_READ(&pmap[py - 1][px - 1]);
+					PREFETCH_READ(&pmap[py + 1][px - 1]);
+				}
+			}
+		}
+
 		auto t = parts[i].type;
 		if (!t)
 			continue;
@@ -2822,16 +2891,19 @@ void Simulation::SequentialElementPass()
 		auto x = int(parts[i].x + 0.5f);
 		auto y = int(parts[i].y + 0.5f);
 
-		// Bounds check
-		if (x < CELL || y < CELL || x >= XRES - CELL || y >= YRES - CELL)
+		// Optimized bounds check
+		if (!IsInBounds(x, y))
 			continue;
+
+		int cy = FastCellCoord(y);
+		int cx = FastCellCoord(x);
 
 		// Stasis check
-		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL] < 8)
+		if (bmap[cy][cx] == WL_STASIS && emap[cy][cx] < 8)
 			continue;
 
-		if (bmap[y/CELL][x/CELL] == WL_DETECT && emap[y/CELL][x/CELL] < 8)
-			set_emap(x/CELL, y/CELL);
+		if (bmap[cy][cx] == WL_DETECT && emap[cy][cx] < 8)
+			set_emap(cx, cy);
 
 		auto neighbourhood = GetNeighbourhood(i);
 
