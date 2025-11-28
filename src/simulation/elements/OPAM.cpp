@@ -34,7 +34,7 @@ void Element::Element_OPAM()
 	DefaultProperties.tmp2 = 0;   // (-) input level
 	DefaultProperties.life = 0;   // Output state
 	HeatConduct = 100;
-	Description = "Op-Amp. Amplifies difference between (+) and (-) inputs. PSCN=(+), NSCN=(-), output right.";
+	Description = "Op-Amp. Amplifies difference between inputs. PSCN=(+), NSCN=(-), output to METL/INWR.";
 
 	Properties = TYPE_SOLID;
 
@@ -53,11 +53,26 @@ void Element::Element_OPAM()
 
 static int update(UPDATE_FUNC_ARGS)
 {
+	/*
+	 * Op-Amp - uses WIRE TYPES for terminals:
+	 *
+	 *   PSCN ---[+]
+	 *              \
+	 *               [OPAM]---> METL/INWR (output)
+	 *              /
+	 *   NSCN ---[-]
+	 *
+	 * PSCN spark = (+) non-inverting input
+	 * NSCN spark = (-) inverting input
+	 * Output = amplified difference (V+ - V-)
+	 * Outputs to METL/INWR when (V+ > V-)
+	 */
+
 	int plusInput = 0;   // Non-inverting input
 	int minusInput = 0;  // Inverting input
 	bool hasPower = false;
 
-	// Scan for inputs
+	// Scan for inputs using wire types
 	for (auto rx = -2; rx <= 2; rx++)
 	{
 		for (auto ry = -2; ry <= 2; ry++)
@@ -79,10 +94,21 @@ static int update(UPDATE_FUNC_ARGS)
 					hasPower = true;
 				}
 
-				// PSCN = (+) non-inverting input
+				// Sparked PSCN = (+) non-inverting input
+				if (rt == PT_SPRK && parts[rID].ctype == PT_PSCN)
+				{
+					plusInput = 100;
+				}
+
+				// Sparked NSCN = (-) inverting input
+				if (rt == PT_SPRK && parts[rID].ctype == PT_NSCN)
+				{
+					minusInput = 100;
+				}
+
+				// Check PSCN with nearby spark
 				if (rt == PT_PSCN)
 				{
-					// Check if PSCN is sparked
 					for (int ddx = -1; ddx <= 1; ddx++)
 					{
 						for (int ddy = -1; ddy <= 1; ddy++)
@@ -101,7 +127,7 @@ static int update(UPDATE_FUNC_ARGS)
 					}
 				}
 
-				// NSCN = (-) inverting input
+				// Check NSCN with nearby spark
 				if (rt == PT_NSCN)
 				{
 					for (int ddx = -1; ddx <= 1; ddx++)
@@ -121,15 +147,6 @@ static int update(UPDATE_FUNC_ARGS)
 						}
 					}
 				}
-
-				// Direct spark on left = (+), top = (-)
-				if (rt == PT_SPRK && parts[rID].life >= 3)
-				{
-					if (rx < 0)
-						plusInput = std::max(plusInput, 80);
-					if (ry < 0)
-						minusInput = std::max(minusInput, 80);
-				}
 			}
 		}
 	}
@@ -147,33 +164,36 @@ static int update(UPDATE_FUNC_ARGS)
 	if (output > 100) output = 100;
 	if (output < 0) output = 0;
 
-	// Only output if powered
+	// Only output if powered or has input
 	if (hasPower || (plusInput > 0 || minusInput > 0))
 	{
 		parts[i].life = output;
 
-		// Output on right side when output is positive
+		// Output to METL/INWR when output is positive
 		if (output > 30)
 		{
-			for (auto rx = 1; rx <= 2; rx++)
+			for (auto rx = -1; rx <= 1; rx++)
 			{
 				for (auto ry = -1; ry <= 1; ry++)
 				{
-					auto r = pmap[y+ry][x+rx];
-					if (r)
+					if (rx || ry)
 					{
-						auto rt = TYP(r);
-						auto rID = ID(r);
-
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
-						     rt == PT_NSCN || rt == PT_RESI)
-						    && parts[rID].life == 0)
+						auto r = pmap[y+ry][x+rx];
+						if (r)
 						{
-							if (sim->rng.chance(output, 100))
+							auto rt = TYP(r);
+							auto rID = ID(r);
+
+							// Output only to METL/INWR (neutral outputs)
+							if ((rt == PT_METL || rt == PT_INWR)
+							    && parts[rID].life == 0)
 							{
-								sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
-								parts[rID].ctype = rt;
-								parts[rID].life = 4;
+								if (sim->rng.chance(output, 100))
+								{
+									sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
+									parts[rID].ctype = rt;
+									parts[rID].life = 4;
+								}
 							}
 						}
 					}

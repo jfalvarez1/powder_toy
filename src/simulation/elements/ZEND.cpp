@@ -30,13 +30,13 @@ void Element::Element_ZEND()
 	Weight = 100;
 
 	DefaultProperties.temp = R_TEMP + 273.15f;
-	DefaultProperties.tmp = 0;   // Direction (like DIOD)
-	DefaultProperties.tmp2 = 50; // Breakdown voltage threshold (1-100)
-	DefaultProperties.life = 0;  // Conducting state
+	DefaultProperties.tmp = 50;   // Breakdown voltage threshold (1-100)
+	DefaultProperties.tmp2 = 0;   // Conducting state
+	DefaultProperties.life = 0;   // Cooldown timer
 	HeatConduct = 251;
-	Description = "Zener Diode. Conducts forward, and reverse when voltage exceeds threshold. Voltage regulator.";
+	Description = "Zener Diode. PSCN=anode, NSCN=cathode. Conducts forward, and reverse above threshold (tmp).";
 
-	Properties = TYPE_SOLID;
+	Properties = TYPE_SOLID | PROP_LIFE_DEC;
 
 	LowPressure = IPL;
 	LowPressureTransition = NT;
@@ -53,98 +53,124 @@ void Element::Element_ZEND()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	int direction = parts[i].tmp % 4;
-	int threshold = parts[i].tmp2;
+	/*
+	 * Zener Diode - uses WIRE TYPES:
+	 *
+	 *   PSCN ---[ZEND]---> NSCN/METL
+	 *   (anode)            (cathode)
+	 *
+	 * Forward: PSCN spark -> outputs to NSCN/METL (like normal diode)
+	 * Reverse: NSCN spark -> outputs to PSCN IF voltage > threshold (Zener breakdown)
+	 *
+	 * tmp = breakdown voltage threshold (1-100)
+	 */
+
+	int threshold = parts[i].tmp;
 	if (threshold < 1) threshold = 1;
 	if (threshold > 100) threshold = 100;
-	parts[i].tmp2 = threshold;
-
-	// Direction offsets (same as DIOD)
-	int dx = 0, dy = 0;
-	int inputDx = 0, inputDy = 0;
-	switch (direction)
-	{
-		case 0: dx = 1; dy = 0; inputDx = -1; inputDy = 0; break;
-		case 1: dx = 0; dy = 1; inputDx = 0; inputDy = -1; break;
-		case 2: dx = -1; dy = 0; inputDx = 1; inputDy = 0; break;
-		case 3: dx = 0; dy = -1; inputDx = 0; inputDy = 1; break;
-	}
+	parts[i].tmp = threshold;
 
 	int forwardVoltage = 0;
 	int reverseVoltage = 0;
 
-	// Count spark sources to estimate voltage
-	for (auto rx = -2; rx <= 2; rx++)
+	// Scan for wire-type inputs
+	for (auto rx = -1; rx <= 1; rx++)
 	{
-		for (auto ry = -2; ry <= 2; ry++)
+		for (auto ry = -1; ry <= 1; ry++)
 		{
 			if (rx || ry)
 			{
-				if (x + rx < 0 || x + rx >= XRES || y + ry < 0 || y + ry >= YRES)
-					continue;
-
 				auto r = pmap[y+ry][x+rx];
 				if (!r)
 					continue;
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				if (rt == PT_SPRK && parts[rID].life >= 3)
+				// PSCN spark = forward bias (anode)
+				if (rt == PT_SPRK && parts[rID].ctype == PT_PSCN)
 				{
-					// Check direction
-					if ((inputDx != 0 && rx * inputDx > 0) || (inputDy != 0 && ry * inputDy > 0))
+					forwardVoltage = 100;
+				}
+
+				// NSCN spark = reverse bias (cathode)
+				if (rt == PT_SPRK && parts[rID].ctype == PT_NSCN)
+				{
+					reverseVoltage = 100;
+				}
+
+				// Check adjacent PSCN/NSCN for nearby sparks
+				if (rt == PT_PSCN)
+				{
+					for (int dx = -1; dx <= 1; dx++)
 					{
-						forwardVoltage += 30;
-					}
-					else if ((dx != 0 && rx * dx > 0) || (dy != 0 && ry * dy > 0))
-					{
-						reverseVoltage += 30;
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							int nx = x + rx + dx;
+							int ny = y + ry + dy;
+							if (nx >= 0 && nx < XRES && ny >= 0 && ny < YRES)
+							{
+								auto r2 = pmap[ny][nx];
+								if (r2 && TYP(r2) == PT_SPRK)
+								{
+									forwardVoltage = 100;
+								}
+							}
+						}
 					}
 				}
 
-				// Battery adds voltage
-				if (rt == PT_BTRY)
+				if (rt == PT_NSCN)
 				{
-					if ((inputDx != 0 && rx * inputDx > 0) || (inputDy != 0 && ry * inputDy > 0))
+					for (int dx = -1; dx <= 1; dx++)
 					{
-						forwardVoltage += 50;
-					}
-					else
-					{
-						reverseVoltage += 50;
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							int nx = x + rx + dx;
+							int ny = y + ry + dy;
+							if (nx >= 0 && nx < XRES && ny >= 0 && ny < YRES)
+							{
+								auto r2 = pmap[ny][nx];
+								if (r2 && TYP(r2) == PT_SPRK)
+								{
+									reverseVoltage = 100;
+								}
+							}
+						}
 					}
 				}
 
-				// Capacitor discharge adds voltage
-				if (rt == PT_CAPA && parts[rID].tmp > 200)
+				// Battery/VCCS add voltage
+				if (rt == PT_BTRY || rt == PT_VCCS)
 				{
-					reverseVoltage += parts[rID].tmp / 10;
+					reverseVoltage += 50;
 				}
 			}
 		}
 	}
 
 	bool shouldConduct = false;
+	bool isReverse = false;
 
-	// Forward bias - always conduct (like normal diode)
+	// Forward bias - always conduct
 	if (forwardVoltage > 20)
 	{
 		shouldConduct = true;
 	}
 
-	// Reverse bias - conduct only if exceeds threshold (Zener breakdown)
-	if (reverseVoltage > threshold)
+	// Reverse bias - conduct only above threshold (Zener breakdown)
+	if (reverseVoltage >= threshold)
 	{
 		shouldConduct = true;
-		// Zener regulation: clamp voltage
-		reverseVoltage = threshold;
+		isReverse = true;
 	}
+
+	parts[i].tmp2 = shouldConduct ? (isReverse ? 2 : 1) : 0;
 
 	if (shouldConduct && parts[i].life == 0)
 	{
 		parts[i].life = 4;
 
-		// Output spark (in appropriate direction)
+		// Output based on direction
 		for (auto rx = -1; rx <= 1; rx++)
 		{
 			for (auto ry = -1; ry <= 1; ry++)
@@ -157,21 +183,17 @@ static int update(UPDATE_FUNC_ARGS)
 						auto rt = TYP(r);
 						auto rID = ID(r);
 
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
-						     rt == PT_NSCN || rt == PT_RESI)
-						    && parts[rID].life == 0)
+						if (parts[rID].life == 0)
 						{
-							// Forward direction output
-							if (forwardVoltage > 20 &&
-							    ((dx != 0 && rx * dx > 0) || (dy != 0 && ry * dy > 0)))
+							// Forward: output to NSCN/METL/INWR
+							if (!isReverse && (rt == PT_NSCN || rt == PT_METL || rt == PT_INWR))
 							{
 								sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
 								parts[rID].ctype = rt;
 								parts[rID].life = 4;
 							}
-							// Reverse breakdown output (goes backwards)
-							if (reverseVoltage >= threshold &&
-							    ((inputDx != 0 && rx * inputDx > 0) || (inputDy != 0 && ry * inputDy > 0)))
+							// Reverse breakdown: output to PSCN/METL/INWR
+							if (isReverse && (rt == PT_PSCN || rt == PT_METL || rt == PT_INWR))
 							{
 								sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
 								parts[rID].ctype = rt;
@@ -184,15 +206,11 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	if (parts[i].life > 0)
+	// Heat when conducting in reverse
+	if (isReverse && shouldConduct)
 	{
-		parts[i].life--;
-	}
-
-	// Heat when conducting in reverse (power dissipation)
-	if (reverseVoltage >= threshold)
-	{
-		parts[i].temp += (reverseVoltage - threshold) * 0.1f;
+		if (sim->rng.chance(1, 10))
+			parts[i].temp += 0.5f;
 	}
 
 	return 0;
@@ -200,8 +218,8 @@ static int update(UPDATE_FUNC_ARGS)
 
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
-	int threshold = cpart->tmp2;
-	int conducting = cpart->life;
+	int threshold = cpart->tmp;
+	int conducting = cpart->tmp2;
 
 	// Dark blue-gray body
 	*colr = 74;
@@ -211,17 +229,30 @@ static int graphics(GRAPHICS_FUNC_ARGS)
 	// Threshold indicator (brighter = higher threshold)
 	*colb += threshold / 3;
 
-	if (conducting > 0)
+	if (conducting == 1)  // Forward
 	{
-		*colr = 120;
+		*colr = 100;
 		*colg = 120;
-		*colb = 160;
+		*colb = 140;
 
-		*firea = 40;
+		*firea = 30;
 		*firer = 100;
-		*fireg = 100;
+		*fireg = 150;
 		*fireb = 200;
 		*pixel_mode |= FIRE_ADD;
+	}
+	else if (conducting == 2)  // Reverse breakdown
+	{
+		*colr = 140;
+		*colg = 100;
+		*colb = 160;
+
+		*firea = 50;
+		*firer = 180;
+		*fireg = 100;
+		*fireb = 255;
+		*pixel_mode |= FIRE_ADD;
+		*pixel_mode |= PMODE_GLOW;
 	}
 
 	return 0;

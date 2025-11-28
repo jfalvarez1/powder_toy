@@ -34,7 +34,7 @@ void Element::Element_RLAY()
 	DefaultProperties.tmp2 = 0;   // Switch state (0=open, 1=closed)
 	DefaultProperties.life = 0;   // Switch delay counter
 	HeatConduct = 80;
-	Description = "Relay. Electrically controlled switch. PSCN controls coil, passes current when energized.";
+	Description = "Relay. PSCN=control coil, NSCN=signal in, METL/INWR=signal out. Passes signal when coil energized.";
 
 	Properties = TYPE_SOLID;
 
@@ -53,11 +53,24 @@ void Element::Element_RLAY()
 
 static int update(UPDATE_FUNC_ARGS)
 {
+	/*
+	 * Relay - uses WIRE TYPES for terminals:
+	 *
+	 *   PSCN ----+
+	 *   (coil)   |
+	 *            v
+	 *   NSCN ---[RLAY]---> METL/INWR
+	 *   (signal in)        (signal out)
+	 *
+	 * PSCN spark = energize coil (control)
+	 * NSCN spark = signal input (when coil energized, passes to output)
+	 * Output to METL/INWR when coil is energized AND signal present
+	 */
+
 	bool coilEnergized = false;
 	bool hasSignalInput = false;
-	int signalStrength = 0;
 
-	// Check for control (coil) and signal inputs
+	// Check for control (coil) and signal inputs using wire types
 	for (auto rx = -2; rx <= 2; rx++)
 	{
 		for (auto ry = -2; ry <= 2; ry++)
@@ -73,7 +86,19 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				// PSCN controls the coil (left side or any PSCN)
+				// Sparked PSCN = coil control
+				if (rt == PT_SPRK && parts[rID].ctype == PT_PSCN)
+				{
+					coilEnergized = true;
+				}
+
+				// Sparked NSCN = signal input
+				if (rt == PT_SPRK && parts[rID].ctype == PT_NSCN)
+				{
+					hasSignalInput = true;
+				}
+
+				// Check PSCN with nearby spark (coil control)
 				if (rt == PT_PSCN)
 				{
 					for (int ddx = -1; ddx <= 1; ddx++)
@@ -94,19 +119,8 @@ static int update(UPDATE_FUNC_ARGS)
 					}
 				}
 
-				// Regular conductor spark = signal to pass
-				if (rt == PT_SPRK && parts[rID].life >= 3)
-				{
-					int srcType = parts[rID].ctype;
-					if (srcType != PT_PSCN)  // Not from control side
-					{
-						hasSignalInput = true;
-						signalStrength = 100;
-					}
-				}
-
-				// NSCN or METL on top/right = signal input
-				if ((rt == PT_NSCN || rt == PT_METL || rt == PT_INWR) && (rx > 0 || ry < 0))
+				// Check NSCN with nearby spark (signal input)
+				if (rt == PT_NSCN)
 				{
 					for (int ddx = -1; ddx <= 1; ddx++)
 					{
@@ -120,7 +134,6 @@ static int update(UPDATE_FUNC_ARGS)
 								if (r2 && TYP(r2) == PT_SPRK)
 								{
 									hasSignalInput = true;
-									signalStrength = 100;
 								}
 							}
 						}
@@ -161,7 +174,7 @@ static int update(UPDATE_FUNC_ARGS)
 	// Pass signal through if switch is closed
 	if (parts[i].tmp2 == 1 && hasSignalInput)
 	{
-		// Output to conductors on opposite side from input
+		// Output to METL/INWR (neutral output conductors)
 		for (auto rx = -1; rx <= 1; rx++)
 		{
 			for (auto ry = -1; ry <= 1; ry++)
@@ -174,17 +187,13 @@ static int update(UPDATE_FUNC_ARGS)
 						auto rt = TYP(r);
 						auto rID = ID(r);
 
-						// Output to NSCN, METL, INWR (not PSCN which is control)
-						if ((rt == PT_NSCN || rt == PT_METL || rt == PT_INWR ||
-						     rt == PT_RESI || rt == PT_TRNS)
+						// Output only to METL or INWR
+						if ((rt == PT_METL || rt == PT_INWR)
 						    && parts[rID].life == 0)
 						{
-							if (sim->rng.chance(signalStrength, 100))
-							{
-								sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
-								parts[rID].ctype = rt;
-								parts[rID].life = 4;
-							}
+							sim->part_change_type(rID, x+rx, y+ry, PT_SPRK);
+							parts[rID].ctype = rt;
+							parts[rID].life = 4;
 						}
 					}
 				}
@@ -195,7 +204,8 @@ static int update(UPDATE_FUNC_ARGS)
 	// Coil heats up when energized
 	if (coilEnergized)
 	{
-		parts[i].temp += 0.1f;
+		if (sim->rng.chance(1, 10))
+			parts[i].temp += 0.1f;
 	}
 
 	return 0;
