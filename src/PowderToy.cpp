@@ -459,26 +459,19 @@ int Main(int argc, char *argv[])
 	explicitSingletons->client = std::make_unique<Client>();
 	Client::Ref().SetAutoStartupRequest(prefs.Get("AutoStartupRequest", true));
 	Client::Ref().Initialize();
-	std::cout << "DEBUG: Client initialized" << std::endl;
 	Client::Ref().SetRedirectStd(redirectStd);
 
 	// SimulationData must be created before SaveRenderer since Simulation constructor needs element data
-	std::cout << "DEBUG: Creating SimulationData (loading elements)" << std::endl;
 	explicitSingletons->simulationData = std::make_unique<SimulationData>();
-	std::cout << "DEBUG: SimulationData created" << std::endl;
 
-	std::cout << "DEBUG: Creating SaveRenderer" << std::endl;
 	explicitSingletons->saveRenderer = std::make_unique<SaveRenderer>();
-	std::cout << "DEBUG: Creating Favorite" << std::endl;
 	explicitSingletons->favorite = std::make_unique<Favorite>();
-	std::cout << "DEBUG: Creating Engine" << std::endl;
 	explicitSingletons->engine = std::make_unique<ui::Engine>();
 
 	// TODO: maybe bind the maximum allowed scale to screen size somehow
 	if(windowFrameOps.scale < 1 || windowFrameOps.scale > SCALE_MAXIMUM)
 		windowFrameOps.scale = 1;
 
-	std::cout << "DEBUG: Setting up engine" << std::endl;
 	auto &engine = ui::Engine::Ref();
 	engine.g = new Graphics();
 	engine.GraveExitsConsole = graveExitsConsole;
@@ -490,7 +483,6 @@ int Main(int argc, char *argv[])
 	engine.TouchUI = prefs.Get("TouchUI", DEFAULT_TOUCH_UI);
 	engine.windowFrameOps = windowFrameOps;
 
-	std::cout << "DEBUG: Calling SDLOpen()" << std::endl;
 	SDLOpen();
 
 	if (Client::Ref().IsFirstRun() && FORCE_WINDOW_FRAME_OPS == forceWindowFrameOpsNone)
@@ -520,14 +512,10 @@ int Main(int argc, char *argv[])
 		X86KillDenormals();
 	}
 
-	std::cout << "DEBUG: Creating GameController" << std::endl;
 	explicitSingletons->gameController = std::make_unique<GameController>();
-	std::cout << "DEBUG: GameController created" << std::endl;
 	auto *gameController = explicitSingletons->gameController.get();
 	engine.ShowWindow(gameController->GetView());
-	std::cout << "DEBUG: Window shown" << std::endl;
 	gameController->InitCommandInterface();
-	std::cout << "DEBUG: CommandInterface initialized" << std::endl;
 
 	auto openArg = arguments["open"];
 	if (openArg.has_value())
@@ -613,10 +601,7 @@ int Main(int argc, char *argv[])
 		Platform::MarkPresentable();
 	}
 
-	std::cout << "DEBUG: About to enter MainLoop()" << std::endl;
-	std::cout << "DEBUG: Engine running = " << (ui::Engine::Ref().Running() ? "true" : "false") << std::endl;
 	MainLoop();
-	std::cout << "DEBUG: MainLoop() exited" << std::endl;
 
 	Platform::Exit(0);
 	return 0;
