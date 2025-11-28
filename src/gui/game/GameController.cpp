@@ -91,6 +91,7 @@ GameController::GameController():
 	gameModel->AddObserver(gameView);
 
 	gameView->SetDebugHUD(GlobalPrefs::Ref().Get("Renderer.DebugMode", false));
+	gameModel->SetMaxFps(GlobalPrefs::Ref().Get("Simulation.MaxFps", 60));
 
 	commandInterface = CommandInterface::Create(this, gameModel);
 

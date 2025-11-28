@@ -87,6 +87,11 @@ void OptionsController::SetPerformanceProfile(int profile)
 	model->SetPerformanceProfile(profile);
 }
 
+void OptionsController::SetMaxFps(int maxFps)
+{
+	model->SetMaxFps(maxFps);
+}
+
 void OptionsController::SetFullscreen(bool fullscreen)
 {
 	model->SetFullscreen(fullscreen);

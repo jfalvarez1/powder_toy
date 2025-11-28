@@ -28,6 +28,7 @@ public:
 	void SetTemperatureScale(TempScale temperatureScale);
 	void SetThreadedRendering(bool newThreadedRendering);
 	void SetPerformanceProfile(int profile);
+	void SetMaxFps(int maxFps);
 	void SetFullscreen(bool fullscreen);
 	void SetChangeResolution(bool newChangeResolution);
 	void SetForceIntegerScaling(bool forceIntegerScaling);

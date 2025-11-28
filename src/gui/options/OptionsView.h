@@ -46,6 +46,7 @@ class OptionsView: public ui::Window
 	ui::Checkbox *nativeClipoard{};
 	ui::Checkbox *threadedRendering{};
 	ui::DropDown *performanceProfile{};
+	ui::DropDown *maxFps{};
 	ui::Checkbox *redirectStd{};
 	ui::Checkbox *autoStartupRequest{};
 	ui::Label *startupRequestStatus{};

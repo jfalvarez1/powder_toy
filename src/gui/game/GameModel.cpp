@@ -306,6 +306,28 @@ void GameModel::SetThreadedRendering(bool newThreadedRendering)
 	threadedRendering = newThreadedRendering;
 }
 
+void GameModel::SetMaxFps(int maxFps)
+{
+	if (maxFps <= 0)
+	{
+		view->SetSimFpsLimit(FpsLimitNone{});
+	}
+	else
+	{
+		view->SetSimFpsLimit(FpsLimitExplicit{ static_cast<float>(maxFps) });
+	}
+}
+
+int GameModel::GetMaxFps() const
+{
+	auto fpsLimit = view->GetSimFpsLimit();
+	if (std::holds_alternative<FpsLimitNone>(fpsLimit))
+	{
+		return 0; // Unlimited
+	}
+	return static_cast<int>(std::get<FpsLimitExplicit>(fpsLimit).value);
+}
+
 void GameModel::SetAmbientAirTemperature(float ambientAirTemp)
 {
 	this->ambientAirTemp = ambientAirTemp;

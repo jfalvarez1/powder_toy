@@ -341,6 +341,15 @@ OptionsView::OptionsView() : ui::Window(ui::Point(-1, -1), ui::Point(320, 340))
 	}, [this] {
 		c->SetPerformanceProfile(performanceProfile->GetOption().second);
 	});
+	maxFps = addDropDown("Max simulation FPS", {
+		{ "60", 60 },
+		{ "120", 120 },
+		{ "144", 144 },
+		{ "165", 165 },
+		{ "Unlimited", 0 },
+	}, [this] {
+		c->SetMaxFps(maxFps->GetOption().second);
+	});
 	decoSpace = addDropDown("Colour space used by decoration tools", {
 		{ "sRGB", DECOSPACE_SRGB },
 		{ "Linear", DECOSPACE_LINEAR },
@@ -644,6 +653,7 @@ void OptionsView::NotifySettingsChanged(OptionsModel * sender)
 	graveExitsConsole->SetChecked(sender->GetGraveExitsConsole());
 	threadedRendering->SetChecked(sender->GetThreadedRendering());
 	performanceProfile->SetOption(sender->GetPerformanceProfile());
+	maxFps->SetOption(sender->GetMaxFps());
 	momentumScroll->SetChecked(sender->GetMomentumScroll());
 	redirectStd->SetChecked(sender->GetRedirectStd());
 	autoStartupRequest->SetChecked(sender->GetAutoStartupRequest());

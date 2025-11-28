@@ -122,6 +122,18 @@ void OptionsModel::SetPerformanceProfile(int profile)
 	notifySettingsChanged();
 }
 
+int OptionsModel::GetMaxFps()
+{
+	return gModel->GetMaxFps();
+}
+
+void OptionsModel::SetMaxFps(int maxFps)
+{
+	GlobalPrefs::Ref().Set("Simulation.MaxFps", maxFps);
+	gModel->SetMaxFps(maxFps);
+	notifySettingsChanged();
+}
+
 float OptionsModel::GetAmbientAirTemperature()
 {
 	return gModel->GetSimulation()->air->ambientAirTemp;

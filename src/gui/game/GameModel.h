@@ -164,6 +164,8 @@ public:
 	{
 		return threadedRendering;
 	}
+	void SetMaxFps(int maxFps);
+	int GetMaxFps() const;
 	void SetAmbientAirTemperature(float ambientAirTemp);
 	float GetAmbientAirTemperature();
 	void SetVorticityCoeff(float vorticityCoeff);

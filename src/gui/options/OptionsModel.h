@@ -38,6 +38,8 @@ public:
 	void SetThreadedRendering(bool newThreadedRendering);
 	int GetPerformanceProfile();
 	void SetPerformanceProfile(int profile);
+	int GetMaxFps();
+	void SetMaxFps(int maxFps);
 	int GetGravityMode();
 	void SetGravityMode(int gravityMode);
 	float GetCustomGravityX();
