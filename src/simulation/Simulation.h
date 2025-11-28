@@ -154,6 +154,22 @@ public:
 	std::vector<CellUpdateBuffer> cellUpdateBuffers; // Thread-local cell update accumulators
 	std::vector<std::vector<int>> particlesInTile; // Particles indexed by spatial tile
 
+	// Element category batching for better cache locality
+	// Categories: 0=powder, 1=liquid, 2=solid, 3=gas, 4=energy, 5=other
+	static constexpr int NUM_ELEMENT_CATEGORIES = 6;
+	std::vector<int> particlesByCategory[NUM_ELEMENT_CATEGORIES];
+	std::array<int, PT_NUM> elementCategory; // Fast category lookup
+
+	// Simple element flags for early-exit optimization
+	// Elements without Update callback can skip sequential pass when stable
+	std::array<bool, PT_NUM> hasUpdateCallback; // Element has Update function
+	std::array<float, PT_NUM> lowTransitionTemp; // Lowest temperature transition point
+	std::array<float, PT_NUM> highTransitionTemp; // Highest temperature transition point
+
+	// Particle compaction tracking
+	int compactionThreshold = 1000; // Compact when this many gaps exist
+	int particleGapCount = 0; // Number of gaps in particle array
+
 	// Lock-free kill queue (avoids mutex contention in parallel phase)
 	static constexpr int KILL_QUEUE_CAPACITY = 8192;
 	std::array<std::atomic<int>, KILL_QUEUE_CAPACITY> killQueue;
@@ -270,6 +286,13 @@ public:
 	void SequentialElementPass(); // Sequential element callback pass
 	void TileBasedParallelUpdate(); // Tile-based spatial processing with empty tile skipping
 	void ProcessTilePhysics(int tileIdx, int threadId); // Physics pass for a single tile
+	void InitElementCategories(); // Initialize element category lookup table
+	void InitElementTransitionTemps(); // Pre-compute transition temperature bounds
+	void BuildCategoryIndex(); // Sort particles by element category
+	void ProcessCategoryBatch(int category, int threadId); // Process particles of one category
+	void CategoryBatchedUpdate(); // Update using element category batching
+	bool CanSkipSequentialPass(int i, int t) const; // Check if particle can skip sequential pass
+	void CompactParticleArray(); // Remove gaps in particle array for better cache locality
 	void SimulateGoL();
 	void RecalcFreeParticles(bool do_life_dec);
 	void CheckStacking();

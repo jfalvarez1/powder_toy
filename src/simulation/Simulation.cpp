@@ -2962,6 +2962,497 @@ void Simulation::ProcessTilePhysics(int tileIdx, int threadId)
 	}
 }
 
+void Simulation::InitElementCategories()
+{
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	// Pre-compute element categories for fast lookup
+	// Categories: 0=powder, 1=liquid, 2=solid, 3=gas, 4=energy, 5=other
+	for (int t = 0; t < PT_NUM; t++)
+	{
+		uint32_t props = elements[t].Properties;
+		if (props & TYPE_PART)
+			elementCategory[t] = 0; // Powder
+		else if (props & TYPE_LIQUID)
+			elementCategory[t] = 1; // Liquid
+		else if (props & TYPE_SOLID)
+			elementCategory[t] = 2; // Solid
+		else if (props & TYPE_GAS)
+			elementCategory[t] = 3; // Gas
+		else if (props & TYPE_ENERGY)
+			elementCategory[t] = 4; // Energy
+		else
+			elementCategory[t] = 5; // Other
+	}
+}
+
+void Simulation::BuildCategoryIndex()
+{
+	// Clear category lists
+	for (int c = 0; c < NUM_ELEMENT_CATEGORIES; c++)
+	{
+		particlesByCategory[c].clear();
+	}
+
+	// Sort particles into categories
+	for (int i = 0; i < parts.active; i++)
+	{
+		int t = parts[i].type;
+		if (!t)
+			continue;
+
+		int cat = elementCategory[t];
+		particlesByCategory[cat].push_back(i);
+	}
+}
+
+void Simulation::ProcessCategoryBatch(int category, int threadId)
+{
+	auto &particles = particlesByCategory[category];
+	if (particles.empty())
+		return;
+
+	RNG &localRng = (threadId >= 0 && threadId < static_cast<int>(threadRngs.size()))
+		? threadRngs[threadId] : rng;
+
+	CellUpdateBuffer *cellBuf = nullptr;
+	if (threadId >= 0 && threadId < static_cast<int>(cellUpdateBuffers.size()))
+	{
+		cellBuf = &cellUpdateBuffers[threadId];
+	}
+
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	// Prefetch first particles
+	constexpr int PREFETCH_COUNT = 8;
+	for (int p = 0; p < PREFETCH_COUNT && p < static_cast<int>(particles.size()); p++)
+	{
+		PREFETCH_READ(&parts[particles[p]]);
+	}
+
+	for (size_t idx = 0; idx < particles.size(); idx++)
+	{
+		int i = particles[idx];
+
+		// Prefetch ahead
+		if (idx + PREFETCH_COUNT < particles.size())
+		{
+			PREFETCH_READ(&parts[particles[idx + PREFETCH_COUNT]]);
+		}
+
+		auto t = parts[i].type;
+		if (!t)
+			continue;
+
+		int x = FastRound(parts[i].x);
+		int y = FastRound(parts[i].y);
+
+		if (!IsInBounds(x, y))
+		{
+			int qIdx = killQueueHead.fetch_add(1, std::memory_order_relaxed);
+			if (qIdx < KILL_QUEUE_CAPACITY)
+			{
+				killQueue[qIdx].store(i, std::memory_order_relaxed);
+				killQueueCount.fetch_add(1, std::memory_order_release);
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(killPartMutex);
+				pendingKills.push_back(i);
+			}
+			continue;
+		}
+
+		int cy = FastCellCoord(y);
+		int cx = FastCellCoord(x);
+
+		// Stasis check
+		if (bmap[cy][cx] == WL_STASIS && emap[cy][cx] < 8)
+			continue;
+
+		// Wall collision
+		if (bmap[cy][cx] &&
+		   (bmap[cy][cx]==WL_WALL ||
+		    bmap[cy][cx]==WL_WALLELEC ||
+		    bmap[cy][cx]==WL_ALLOWAIR ||
+		    bmap[cy][cx]==WL_DESTROYALL ||
+		    (bmap[cy][cx]==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
+		    (bmap[cy][cx]==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
+		    (bmap[cy][cx]==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
+		    (bmap[cy][cx]==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
+		    (bmap[cy][cx]==WL_EWALL && !emap[cy][cx])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		{
+			int qIdx = killQueueHead.fetch_add(1, std::memory_order_relaxed);
+			if (qIdx < KILL_QUEUE_CAPACITY)
+			{
+				killQueue[qIdx].store(i, std::memory_order_relaxed);
+				killQueueCount.fetch_add(1, std::memory_order_release);
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(killPartMutex);
+				pendingKills.push_back(i);
+			}
+			continue;
+		}
+
+		// Accumulate cell updates
+		if (cellBuf)
+		{
+			float airLossContrib = vx[cy][cx] * (elements[t].AirLoss - 1.0f);
+			float airDragContrib = elements[t].AirDrag * parts[i].vx;
+			cellBuf->dvx[cy][cx] += airLossContrib + airDragContrib;
+
+			airLossContrib = vy[cy][cx] * (elements[t].AirLoss - 1.0f);
+			airDragContrib = elements[t].AirDrag * parts[i].vy;
+			cellBuf->dvy[cy][cx] += airLossContrib + airDragContrib;
+
+			if (elements[t].HotAir)
+			{
+				float hotAir = elements[t].HotAir;
+				if (t == PT_GAS || t == PT_NBLE)
+				{
+					cellBuf->dpv[cy][cx] += hotAir * std::max(0.0f, 3.5f - pv[cy][cx]);
+				}
+				else
+				{
+					cellBuf->dpv[cy][cx] += hotAir;
+				}
+			}
+		}
+
+		// Velocity updates (same element type = same Loss/Advection/Diffusion values cached)
+		float loss = elements[t].Loss;
+		float advection = elements[t].Advection;
+		float diffusion = elements[t].Diffusion;
+		float gravity = elements[t].Gravity;
+		float newtonGrav = elements[t].NewtonianGravity;
+
+		if (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE))
+		{
+			parts[i].vx *= loss;
+			parts[i].vy *= loss;
+		}
+
+		float pGravX = 0, pGravY = 0;
+		GetGravityField(x, y, gravity, newtonGrav, pGravX, pGravY);
+
+		parts[i].vx += advection * vx[cy][cx] + pGravX;
+		parts[i].vy += advection * vy[cy][cx] + pGravY;
+
+		if (diffusion > 0)
+		{
+			parts[i].vx += diffusion * (2.0f * localRng.uniform01() - 1.0f);
+			parts[i].vy += diffusion * (2.0f * localRng.uniform01() - 1.0f);
+		}
+	}
+}
+
+void Simulation::CategoryBatchedUpdate()
+{
+	if (!ThreadPool::IsEnabled())
+	{
+		UpdateParticles(0, parts.active);
+		return;
+	}
+
+	int numThreads = static_cast<int>(ThreadPool::Ref().GetThreadCount());
+
+	// Initialize thread-local resources
+	if (threadRngs.size() != static_cast<size_t>(numThreads))
+	{
+		threadRngs.resize(numThreads);
+		for (int t = 0; t < numThreads; t++)
+		{
+			threadRngs[t] = RNG();
+			threadRngs[t].seed(rng.gen() + t * 12345);
+		}
+	}
+
+	if (cellUpdateBuffers.size() != static_cast<size_t>(numThreads))
+	{
+		cellUpdateBuffers.resize(numThreads);
+	}
+
+	// Clear kill queues
+	killQueueHead.store(0, std::memory_order_relaxed);
+	killQueueCount.store(0, std::memory_order_relaxed);
+	pendingKills.clear();
+
+	// Build category index - O(n) pass
+	BuildCategoryIndex();
+
+	// Phase 1: Process categories in parallel
+	// Different categories can run simultaneously since they don't interact
+	// within the physics phase
+	std::vector<std::thread> threads;
+	threads.reserve(numThreads);
+
+	// Distribute categories among threads (balance workload)
+	// Energy particles are usually few, so combine with gas
+	// Solids are often static, process separately
+	struct CategoryWork {
+		int category;
+		int count;
+	};
+	std::vector<CategoryWork> work;
+	for (int c = 0; c < NUM_ELEMENT_CATEGORIES; c++)
+	{
+		if (!particlesByCategory[c].empty())
+		{
+			work.push_back({c, static_cast<int>(particlesByCategory[c].size())});
+		}
+	}
+
+	// Sort by particle count (largest first for better load balancing)
+	std::sort(work.begin(), work.end(), [](const CategoryWork &a, const CategoryWork &b) {
+		return a.count > b.count;
+	});
+
+	// Process each category
+	for (size_t w = 0; w < work.size(); w++)
+	{
+		int category = work[w].category;
+		auto &particles = particlesByCategory[category];
+
+		if (particles.size() < 100)
+		{
+			// Small category - process single-threaded
+			ProcessCategoryBatch(category, 0);
+		}
+		else
+		{
+			// Large category - split among threads
+			int particleCount = static_cast<int>(particles.size());
+			int chunkSize = (particleCount + numThreads - 1) / numThreads;
+
+			threads.clear();
+			for (int tid = 0; tid < numThreads; tid++)
+			{
+				int start = tid * chunkSize;
+				int end = std::min(start + chunkSize, particleCount);
+				if (start >= end)
+					break;
+
+				threads.emplace_back([this, category, start, end, tid]() {
+					auto &sd = SimulationData::CRef();
+					auto &elements = sd.elements;
+					auto &particles = particlesByCategory[category];
+
+					RNG &localRng = threadRngs[tid];
+					CellUpdateBuffer *cellBuf = &cellUpdateBuffers[tid];
+
+					for (int idx = start; idx < end; idx++)
+					{
+						int i = particles[idx];
+						auto t = parts[i].type;
+						if (!t)
+							continue;
+
+						int x = FastRound(parts[i].x);
+						int y = FastRound(parts[i].y);
+
+						if (!IsInBounds(x, y))
+							continue;
+
+						int cy = FastCellCoord(y);
+						int cx = FastCellCoord(x);
+
+						if (bmap[cy][cx] == WL_STASIS && emap[cy][cx] < 8)
+							continue;
+
+						// Cell updates
+						float airLossContrib = vx[cy][cx] * (elements[t].AirLoss - 1.0f);
+						float airDragContrib = elements[t].AirDrag * parts[i].vx;
+						cellBuf->dvx[cy][cx] += airLossContrib + airDragContrib;
+
+						airLossContrib = vy[cy][cx] * (elements[t].AirLoss - 1.0f);
+						airDragContrib = elements[t].AirDrag * parts[i].vy;
+						cellBuf->dvy[cy][cx] += airLossContrib + airDragContrib;
+
+						// Velocity updates
+						if (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE))
+						{
+							parts[i].vx *= elements[t].Loss;
+							parts[i].vy *= elements[t].Loss;
+						}
+
+						float pGravX = 0, pGravY = 0;
+						GetGravityField(x, y, elements[t].Gravity, elements[t].NewtonianGravity, pGravX, pGravY);
+
+						parts[i].vx += elements[t].Advection * vx[cy][cx] + pGravX;
+						parts[i].vy += elements[t].Advection * vy[cy][cx] + pGravY;
+
+						if (elements[t].Diffusion > 0)
+						{
+							parts[i].vx += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+							parts[i].vy += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+						}
+					}
+				});
+			}
+
+			for (auto &thread : threads)
+			{
+				thread.join();
+			}
+		}
+	}
+
+	// Merge cell updates
+	MergeCellUpdates();
+
+	// Process pending kills
+	ProcessPendingKills();
+
+	// Phase 2: Sequential element callbacks
+	SequentialElementPass();
+}
+
+void Simulation::InitElementTransitionTemps()
+{
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	// Pre-compute transition temperature bounds for early-exit optimization
+	for (int t = 0; t < PT_NUM; t++)
+	{
+		hasUpdateCallback[t] = (elements[t].Update != nullptr);
+
+		// Find temperature bounds where transitions can occur
+		float lowTemp = -9999999.0f;
+		float highTemp = 9999999.0f;
+
+		// Check low pressure transition
+		if (elements[t].LowTemperature > 0 && elements[t].LowTemperatureTransition)
+		{
+			highTemp = std::min(highTemp, elements[t].LowTemperature + 50.0f);
+		}
+		// Check high pressure transition
+		if (elements[t].HighTemperature < MAX_TEMP && elements[t].HighTemperatureTransition)
+		{
+			lowTemp = std::max(lowTemp, elements[t].HighTemperature - 50.0f);
+		}
+
+		lowTransitionTemp[t] = lowTemp;
+		highTransitionTemp[t] = highTemp;
+	}
+}
+
+bool Simulation::CanSkipSequentialPass(int i, int t) const
+{
+	// Quick checks for particles that MUST go through sequential pass
+
+	// Has an update callback - must process
+	if (hasUpdateCallback[t])
+		return false;
+
+	// Particle has velocity - needs movement
+	if (parts[i].vx != 0.0f || parts[i].vy != 0.0f)
+		return false;
+
+	// Temperature near transition point - needs processing
+	float temp = parts[i].temp;
+	if (temp >= lowTransitionTemp[t] || temp <= highTransitionTemp[t])
+		return false;
+
+	// Particle has life that needs decrementing
+	if (parts[i].life > 0)
+		return false;
+
+	// Safe to skip
+	return true;
+}
+
+void Simulation::CompactParticleArray()
+{
+	// Compacts the particle array by moving particles to fill gaps
+	// This improves cache locality for particle iteration
+
+	if (parts.active <= 0)
+		return;
+
+	// Quick estimate of fragmentation
+	int lastActive = parts.active - 1;
+	int gaps = 0;
+
+	// Count gaps in first portion of array
+	int checkLimit = std::min(parts.active, 1000);
+	for (int i = 0; i < checkLimit; i++)
+	{
+		if (!parts[i].type)
+			gaps++;
+	}
+
+	// Estimate total gaps
+	particleGapCount = (parts.active > 1000)
+		? (gaps * parts.active / 1000)
+		: gaps;
+
+	// Only compact if fragmentation exceeds threshold
+	if (particleGapCount < compactionThreshold)
+		return;
+
+	// Compact: move particles from end to fill gaps at beginning
+	int writePos = 0;
+	int readPos = lastActive;
+
+	while (writePos < readPos)
+	{
+		// Find next gap
+		while (writePos < readPos && parts[writePos].type)
+			writePos++;
+
+		// Find next particle from end
+		while (readPos > writePos && !parts[readPos].type)
+			readPos--;
+
+		if (writePos < readPos)
+		{
+			// Move particle from readPos to writePos
+			int type = parts[readPos].type;
+			int x = FastRound(parts[readPos].x);
+			int y = FastRound(parts[readPos].y);
+
+			// Copy particle data
+			parts[writePos] = parts[readPos];
+			parts[readPos].type = 0;
+
+			// Update pmap reference
+			if (IsInBounds(x, y))
+			{
+				if (ID(pmap[y][x]) == readPos)
+				{
+					pmap[y][x] = PMAP(type, writePos);
+				}
+				// Check photons map
+				if (ID(photons[y][x]) == readPos)
+				{
+					photons[y][x] = PMAP(type, writePos);
+				}
+			}
+
+			writePos++;
+			readPos--;
+		}
+	}
+
+	// Update active count
+	int newActive = 0;
+	for (int i = parts.active - 1; i >= 0; i--)
+	{
+		if (parts[i].type)
+		{
+			newActive = i + 1;
+			break;
+		}
+	}
+	parts.active = newActive;
+	particleGapCount = 0;
+}
+
 void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 {
 	RNG &localRng = (threadId >= 0 && threadId < static_cast<int>(threadRngs.size()))
@@ -3197,6 +3688,11 @@ void Simulation::SequentialElementPass()
 
 		if (bmap[cy][cx] == WL_DETECT && emap[cy][cx] < 8)
 			set_emap(cx, cy);
+
+		// Early-exit for simple/static elements
+		// Skip particles that have no update callback, no velocity, and stable temperature
+		if (CanSkipSequentialPass(i, t))
+			continue;
 
 		auto neighbourhood = GetNeighbourhood(i);
 
@@ -4696,6 +5192,13 @@ void Simulation::BeforeSim(bool willUpdate)
 	if (debug_nextToUpdate == 0)
 		RecalcFreeParticles(willUpdate);
 
+	// Periodically compact particle array for better cache locality
+	// Only do this every ~180 frames to avoid overhead
+	if (willUpdate && (currentTick % 180) == 0)
+	{
+		CompactParticleArray();
+	}
+
 	if (willUpdate)
 	{
 		// decrease wall conduction, make walls block air and ambient heat
@@ -4872,6 +5375,12 @@ Simulation::Simulation()
 	player2.comm = 0;
 
 	clear_sim();
+
+	// Initialize element category lookup for optimized batching
+	InitElementCategories();
+
+	// Pre-compute transition temperatures for early-exit optimization
+	InitElementTransitionTemps();
 
 	UpdateGravityMask();
 }
