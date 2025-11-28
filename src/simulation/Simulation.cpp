@@ -2381,6 +2381,243 @@ void Simulation::UpdateParticles(int start, int end)
 	}
 }
 
+void Simulation::BuildSpatialIndex()
+{
+	// Resize tile vector if needed
+	if (particlesInTile.size() != TOTAL_TILES)
+	{
+		particlesInTile.resize(TOTAL_TILES);
+	}
+
+	// Clear all tiles
+	for (auto &tile : particlesInTile)
+	{
+		tile.clear();
+	}
+
+	// Assign particles to tiles based on their position
+	for (int i = 0; i < parts.active; i++)
+	{
+		if (!parts[i].type)
+			continue;
+
+		int x = int(parts[i].x + 0.5f);
+		int y = int(parts[i].y + 0.5f);
+
+		// Clamp to valid range
+		if (x < 0) x = 0;
+		if (y < 0) y = 0;
+		if (x >= XRES) x = XRES - 1;
+		if (y >= YRES) y = YRES - 1;
+
+		int tileX = x / TILE_SIZE;
+		int tileY = y / TILE_SIZE;
+		int tileIdx = tileY * TILES_X + tileX;
+
+		if (tileIdx >= 0 && tileIdx < TOTAL_TILES)
+		{
+			particlesInTile[tileIdx].push_back(i);
+		}
+	}
+}
+
+void Simulation::MergeCellUpdates()
+{
+	// Merge thread-local cell update buffers into main arrays
+	for (size_t t = 0; t < cellUpdateBuffers.size(); t++)
+	{
+		auto &buf = cellUpdateBuffers[t];
+		for (int cy = 0; cy < YCELLS; cy++)
+		{
+			for (int cx = 0; cx < XCELLS; cx++)
+			{
+				if (buf.dvx[cy][cx] != 0.0f)
+				{
+					vx[cy][cx] += buf.dvx[cy][cx];
+				}
+				if (buf.dvy[cy][cx] != 0.0f)
+				{
+					vy[cy][cx] += buf.dvy[cy][cx];
+				}
+				if (buf.dpv[cy][cx] != 0.0f)
+				{
+					pv[cy][cx] += buf.dpv[cy][cx];
+				}
+			}
+		}
+		buf.Clear();
+	}
+}
+
+void Simulation::ProcessPendingKills()
+{
+	// Process all deferred particle kills
+	for (int i : pendingKills)
+	{
+		if (parts[i].type)
+		{
+			kill_part(i);
+		}
+	}
+	pendingKills.clear();
+	parallelKillCount.store(0);
+}
+
+void Simulation::ProcessTile(int tileIdx, int threadId, bool skipElementCallbacks)
+{
+	if (tileIdx < 0 || tileIdx >= TOTAL_TILES)
+		return;
+
+	auto &particles = particlesInTile[tileIdx];
+	if (particles.empty())
+		return;
+
+	RNG &localRng = (threadId >= 0 && threadId < static_cast<int>(threadRngs.size()))
+		? threadRngs[threadId] : rng;
+
+	CellUpdateBuffer *cellBuf = nullptr;
+	if (threadId >= 0 && threadId < static_cast<int>(cellUpdateBuffers.size()))
+	{
+		cellBuf = &cellUpdateBuffers[threadId];
+	}
+
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	for (int i : particles)
+	{
+		auto t = parts[i].type;
+		if (!t)
+			continue;
+
+		auto x = int(parts[i].x + 0.5f);
+		auto y = int(parts[i].y + 0.5f);
+
+		// Kill particle off screen - defer to avoid race conditions
+		if (x < CELL || y < CELL || x >= XRES - CELL || y >= YRES - CELL)
+		{
+			std::lock_guard<std::mutex> lock(killPartMutex);
+			pendingKills.push_back(i);
+			continue;
+		}
+
+		// Kill particle in wall - defer to avoid race conditions
+		if (bmap[y/CELL][x/CELL] &&
+		   (bmap[y/CELL][x/CELL]==WL_WALL ||
+		    bmap[y/CELL][x/CELL]==WL_WALLELEC ||
+		    bmap[y/CELL][x/CELL]==WL_ALLOWAIR ||
+		    (bmap[y/CELL][x/CELL]==WL_DESTROYALL) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
+		    (bmap[y/CELL][x/CELL]==WL_EWALL && !emap[y/CELL][x/CELL])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		{
+			std::lock_guard<std::mutex> lock(killPartMutex);
+			pendingKills.push_back(i);
+			continue;
+		}
+
+		// Stasis check
+		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL] < 8)
+			continue;
+
+		if (bmap[y/CELL][x/CELL] == WL_DETECT && emap[y/CELL][x/CELL] < 8)
+			set_emap(x/CELL, y/CELL);
+
+		// Accumulate velocity changes to thread-local buffer
+		int cy = y / CELL;
+		int cx = x / CELL;
+
+		if (cellBuf)
+		{
+			// Thread-local accumulation (no race conditions)
+			float airLossContrib = vx[cy][cx] * (elements[t].AirLoss - 1.0f);
+			float airDragContrib = elements[t].AirDrag * parts[i].vx;
+			cellBuf->dvx[cy][cx] += airLossContrib + airDragContrib;
+
+			airLossContrib = vy[cy][cx] * (elements[t].AirLoss - 1.0f);
+			airDragContrib = elements[t].AirDrag * parts[i].vy;
+			cellBuf->dvy[cy][cx] += airLossContrib + airDragContrib;
+
+			if (elements[t].HotAir)
+			{
+				if (t == PT_GAS || t == PT_NBLE)
+				{
+					float contribution = elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx]);
+					cellBuf->dpv[cy][cx] += contribution;
+					if (cy + 1 < YCELLS)
+						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx]);
+					if (cx + 1 < XCELLS)
+					{
+						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx + 1]);
+						if (cy + 1 < YCELLS)
+							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx + 1]);
+					}
+				}
+				else
+				{
+					cellBuf->dpv[cy][cx] += elements[t].HotAir;
+					if (cy + 1 < YCELLS)
+						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir;
+					if (cx + 1 < XCELLS)
+					{
+						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir;
+						if (cy + 1 < YCELLS)
+							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir;
+					}
+				}
+			}
+		}
+
+		auto neighbourhood = GetNeighbourhood(i);
+
+		// Velocity updates for particle
+		if (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE))
+		{
+			parts[i].vx *= elements[t].Loss;
+			parts[i].vy *= elements[t].Loss;
+		}
+		parts[i].vx += elements[t].Advection * vx[cy][cx] + neighbourhood.pGravX;
+		parts[i].vy += elements[t].Advection * vy[cy][cx] + neighbourhood.pGravY;
+
+		if (elements[t].Diffusion)
+		{
+			parts[i].vx += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+			parts[i].vy += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+		}
+
+		auto transitionOccurred = TransitionPhase(i, neighbourhood);
+		if (!parts[i].type)
+			continue;
+		if (transitionOccurred)
+			t = parts[i].type;
+
+		// Skip element callbacks in parallel phase if requested
+		if (!skipElementCallbacks && elements[t].Update)
+		{
+			if ((*(elements[t].Update))(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap))
+				continue;
+			x = int(parts[i].x + 0.5f);
+			y = int(parts[i].y + 0.5f);
+		}
+
+		if (legacy_enable)
+			Element::legacyUpdate(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap);
+
+		if (parts[i].type == PT_NONE)
+			continue;
+
+		if (transitionOccurred)
+			continue;
+
+		if (!parts[i].vx && !parts[i].vy)
+			continue;
+
+		MovementPhase(i, neighbourhood);
+	}
+}
+
 void Simulation::UpdateParticlesParallel()
 {
 	if (!ThreadPool::IsEnabled())
@@ -2393,33 +2630,85 @@ void Simulation::UpdateParticlesParallel()
 	auto &pool = ThreadPool::Ref();
 	int numThreads = static_cast<int>(pool.GetThreadCount());
 
-	// Initialize thread-local RNGs if needed
+	// Initialize thread-local resources if needed
 	if (threadRngs.size() != static_cast<size_t>(numThreads))
 	{
 		threadRngs.resize(numThreads);
 		for (int t = 0; t < numThreads; t++)
 		{
-			// Seed each thread RNG differently
 			threadRngs[t] = RNG();
 			threadRngs[t].seed(rng.gen() + t * 12345);
 		}
 	}
 
-	// Divide particles into chunks by index
-	// This is simpler than spatial chunking but still provides parallelism
-	int chunkSize = (parts.active + numThreads - 1) / numThreads;
+	if (cellUpdateBuffers.size() != static_cast<size_t>(numThreads))
+	{
+		cellUpdateBuffers.resize(numThreads);
+	}
 
-	pool.ParallelFor(0, numThreads, [this, chunkSize](int startThread, int endThread) {
-		for (int t = startThread; t < endThread; t++)
+	// Clear pending kills
+	pendingKills.clear();
+	parallelKillCount.store(0);
+
+	// Build spatial index
+	BuildSpatialIndex();
+
+	// Process tiles using checkerboard pattern to minimize conflicts
+	// Phase 1: Process even tiles (tiles where (tileX + tileY) is even)
+	// Phase 2: Process odd tiles (tiles where (tileX + tileY) is odd)
+
+	// Collect even and odd tile indices
+	std::vector<int> evenTiles, oddTiles;
+	evenTiles.reserve(TOTAL_TILES / 2 + 1);
+	oddTiles.reserve(TOTAL_TILES / 2 + 1);
+
+	for (int tileY = 0; tileY < TILES_Y; tileY++)
+	{
+		for (int tileX = 0; tileX < TILES_X; tileX++)
 		{
-			int start = t * chunkSize;
-			int end = std::min(start + chunkSize, parts.active);
-			UpdateParticlesInStrip(start, end, t);
+			int tileIdx = tileY * TILES_X + tileX;
+			if ((tileX + tileY) % 2 == 0)
+				evenTiles.push_back(tileIdx);
+			else
+				oddTiles.push_back(tileIdx);
+		}
+	}
+
+	// Phase 1: Process even tiles in parallel
+	int evenCount = static_cast<int>(evenTiles.size());
+	pool.ParallelFor(0, evenCount, [this, &evenTiles](int start, int end) {
+		// Determine thread ID from work range
+		int threadId = 0;
+		if (!threadRngs.empty())
+		{
+			// Use a simple hash of start position to get consistent thread ID
+			threadId = start % static_cast<int>(threadRngs.size());
+		}
+		for (int i = start; i < end; i++)
+		{
+			ProcessTile(evenTiles[i], threadId, false);
 		}
 	});
 
-	// After parallel update, sync any state that needs it
-	// The rng state from threads is intentionally not merged back
+	// Phase 2: Process odd tiles in parallel
+	int oddCount = static_cast<int>(oddTiles.size());
+	pool.ParallelFor(0, oddCount, [this, &oddTiles](int start, int end) {
+		int threadId = 0;
+		if (!threadRngs.empty())
+		{
+			threadId = start % static_cast<int>(threadRngs.size());
+		}
+		for (int i = start; i < end; i++)
+		{
+			ProcessTile(oddTiles[i], threadId, false);
+		}
+	});
+
+	// Merge cell updates from all threads
+	MergeCellUpdates();
+
+	// Process deferred particle kills
+	ProcessPendingKills();
 }
 
 void Simulation::UpdateParticlesInStrip(int start, int end, int threadId)

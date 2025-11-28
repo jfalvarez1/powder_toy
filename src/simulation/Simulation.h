@@ -20,8 +20,37 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <atomic>
+#include <mutex>
 
 constexpr int CHANNELS = int(MAX_TEMP - 73) / 100 + 2;
+
+// Spatial tile constants for parallel processing
+// Tiles are sized to fit nicely in cache and minimize boundary conflicts
+constexpr int TILE_SIZE = 64; // Pixels per tile side (power of 2 for fast division)
+constexpr int TILES_X = (XRES + TILE_SIZE - 1) / TILE_SIZE;
+constexpr int TILES_Y = (YRES + TILE_SIZE - 1) / TILE_SIZE;
+constexpr int TOTAL_TILES = TILES_X * TILES_Y;
+
+// Thread-local buffer for accumulating cell updates without contention
+struct CellUpdateBuffer
+{
+	float dvx[YCELLS][XCELLS];
+	float dvy[YCELLS][XCELLS];
+	float dpv[YCELLS][XCELLS];
+
+	CellUpdateBuffer()
+	{
+		Clear();
+	}
+
+	void Clear()
+	{
+		std::memset(dvx, 0, sizeof(dvx));
+		std::memset(dvy, 0, sizeof(dvy));
+		std::memset(dpv, 0, sizeof(dpv));
+	}
+};
 
 class Snapshot;
 class Brush;
@@ -121,6 +150,11 @@ public:
 
 	RNG rng;
 	std::vector<RNG> threadRngs; // Per-thread RNGs for parallel processing
+	std::vector<CellUpdateBuffer> cellUpdateBuffers; // Thread-local cell update accumulators
+	std::vector<std::vector<int>> particlesInTile; // Particles indexed by spatial tile
+	std::mutex killPartMutex; // Mutex for thread-safe particle killing
+	std::vector<int> pendingKills; // Particles to kill after parallel phase
+	std::atomic<int> parallelKillCount{0}; // Count of pending kills
 
 	int replaceModeSelected = 0;
 	int replaceModeFlags = 0;
@@ -220,6 +254,12 @@ public:
 	void UpdateParticles(int start, int end); // Dispatches an update to the range [start, end).
 	void UpdateParticlesParallel(); // Parallel version using spatial chunking
 	void UpdateParticlesInStrip(int stripStart, int stripEnd, int threadId); // Update particles in Y-strip
+	void BuildSpatialIndex(); // Build tile-based spatial index for particles
+	void ProcessTile(int tileIdx, int threadId, bool skipElementCallbacks); // Process all particles in a tile
+	void MergeCellUpdates(); // Merge thread-local cell updates into main arrays
+	void ProcessPendingKills(); // Process deferred particle kills
+	void ParallelPhysicsUpdate(); // Physics-only parallel update (movement, velocity)
+	void SequentialElementUpdate(); // Sequential element callback phase
 	void SimulateGoL();
 	void RecalcFreeParticles(bool do_life_dec);
 	void CheckStacking();
