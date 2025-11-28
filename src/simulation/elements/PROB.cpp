@@ -1,4 +1,5 @@
 #include "simulation/ElementCommon.h"
+#include <cmath>
 
 static int update(UPDATE_FUNC_ARGS);
 static int graphics(GRAPHICS_FUNC_ARGS);
@@ -30,11 +31,11 @@ void Element::Element_PROB()
 	Weight = 100;
 
 	DefaultProperties.temp = R_TEMP + 273.15f;
-	DefaultProperties.tmp = 0;    // Channel ID (0-3) for oscilloscope
-	DefaultProperties.tmp2 = 0;   // Current sample value (0-255)
-	DefaultProperties.life = 0;   // Sample history encoded in pavg (visual)
+	DefaultProperties.tmp = 0;    // Channel ID (0-3): Yellow, Cyan, Magenta, Green
+	DefaultProperties.tmp2 = 0;   // Current sample value (0-100)
+	DefaultProperties.life = 0;   // Sample history
 	HeatConduct = 50;
-	Description = "Oscilloscope Probe. Place near circuit to sample signals. Tmp=channel (0-3). Connect to OSCI.";
+	Description = "Probe. Samples signals for OSCI. Tmp=channel(0-3). PSCN=ch+, NSCN=ch-. Colors: Yel,Cyn,Mag,Grn";
 
 	Properties = TYPE_SOLID;
 
@@ -53,14 +54,13 @@ void Element::Element_PROB()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	// Clamp channel ID
-	int channel = parts[i].tmp % 4;
+	int channel = parts[i].tmp;
 	if (channel < 0) channel = 0;
-	parts[i].tmp = channel;
+	if (channel > 3) channel = 3;
 
 	int sampleValue = 0;
 
-	// Sample nearby electrical activity
+	// Scan for channel control and signals
 	for (auto rx = -2; rx <= 2; rx++)
 	{
 		for (auto ry = -2; ry <= 2; ry++)
@@ -76,32 +76,35 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
+				// Channel control: PSCN spark = next channel, NSCN = prev channel
+				if (rt == PT_SPRK && parts[rID].life == 3)
+				{
+					if (parts[rID].ctype == PT_PSCN)
+					{
+						channel = (channel + 1) % 4;
+					}
+					else if (parts[rID].ctype == PT_NSCN)
+					{
+						channel = (channel + 3) % 4;  // +3 mod 4 = -1
+					}
+				}
+
+				// Sample from SGNL (signal generator) - read tmp3
+				if (rt == PT_SGNL)
+				{
+					sampleValue = std::max(sampleValue, parts[rID].tmp3);
+				}
+
 				// Sample from VCCS (voltage)
 				if (rt == PT_VCCS)
 				{
-					sampleValue = std::max(sampleValue, (int)parts[rID].tmp2 / 2);
+					sampleValue = std::max(sampleValue, parts[rID].tmp2 / 5);
 				}
 
 				// Sample spark presence
 				if (rt == PT_SPRK)
 				{
-					sampleValue = std::max(sampleValue, parts[rID].life * 25);
-				}
-
-				// Sample from signal generator
-				if (rt == PT_SGNL)
-				{
-					int phase = parts[rID].life;
-					int waveform = parts[rID].tmp2 % 4;
-					int output = 0;
-					switch (waveform)
-					{
-						case 0: output = (phase < 500) ? 100 : 0; break;
-						case 1: output = (int)(50 + 50 * sin(phase / 1000.0f * 2 * 3.14159f)); break;
-						case 2: output = phase / 10; break;
-						case 3: output = (phase < 100) ? 100 : 0; break;
-					}
-					sampleValue = std::max(sampleValue, output);
+					sampleValue = std::max(sampleValue, parts[rID].life * 20);
 				}
 
 				// Sample from capacitor (charge level)
@@ -116,74 +119,84 @@ static int update(UPDATE_FUNC_ARGS)
 				// Sample from voltmeter
 				if (rt == PT_VOLT)
 				{
-					sampleValue = std::max(sampleValue, (int)parts[rID].tmp / 2);
+					sampleValue = std::max(sampleValue, parts[rID].tmp / 5);
 				}
 
 				// Sample from ammeter
 				if (rt == PT_AMPR)
 				{
-					sampleValue = std::max(sampleValue, (int)parts[rID].tmp / 3);
+					sampleValue = std::max(sampleValue, parts[rID].tmp / 5);
 				}
 			}
 		}
 	}
 
+	parts[i].tmp = channel;
+
 	// Clamp sample value
-	if (sampleValue > 255) sampleValue = 255;
+	if (sampleValue > 100) sampleValue = 100;
 	if (sampleValue < 0) sampleValue = 0;
 
 	parts[i].tmp2 = sampleValue;
 
-	// Shift history and add new sample (store in pavg for persistence)
-	// pavg[0] stores recent history as bit-packed values
-	// We'll use life to store a simplified waveform pattern
-	parts[i].life = ((parts[i].life << 4) | (sampleValue / 16)) & 0xFFFFFF;
+	// Store sample for oscilloscope - use tmp3 for sample, tmp4 for channel
+	parts[i].tmp3 = sampleValue;
+	parts[i].tmp4 = channel;
+
+	// Shift history (6 samples packed into life)
+	parts[i].life = ((parts[i].life << 4) | (sampleValue / 7)) & 0xFFFFFF;
 
 	return 0;
 }
 
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
-	int channel = cpart->tmp;
+	int channel = cpart->tmp % 4;
 	int sample = cpart->tmp2;
 
-	// Channel colors: 0=Yellow, 1=Cyan, 2=Magenta, 3=Green
+	// Distinct colors for each channel
 	switch (channel)
 	{
-		case 0:
+		case 0:  // Yellow
 			*colr = 255;
 			*colg = 255;
 			*colb = 0;
 			break;
-		case 1:
+		case 1:  // Cyan
 			*colr = 0;
 			*colg = 255;
 			*colb = 255;
 			break;
-		case 2:
+		case 2:  // Magenta
 			*colr = 255;
 			*colg = 0;
 			*colb = 255;
 			break;
-		case 3:
+		case 3:  // Green
 			*colr = 0;
 			*colg = 255;
 			*colb = 0;
 			break;
 	}
 
-	// Brightness based on sample
-	if (sample > 0)
+	// Brightness based on sample (dim when no signal)
+	if (sample < 10)
 	{
-		float intensity = sample / 255.0f;
-		*firea = (int)(50 * intensity);
+		*colr = *colr / 3;
+		*colg = *colg / 3;
+		*colb = *colb / 3;
+	}
+	else
+	{
+		float intensity = sample / 100.0f;
+		*firea = (int)(80 * intensity);
 		*firer = *colr;
 		*fireg = *colg;
 		*fireb = *colb;
 		*pixel_mode |= FIRE_ADD;
 	}
 
-	// Pulsing effect when active
+	// Strong glow when active
 	if (sample > 50)
 	{
 		*pixel_mode |= PMODE_GLOW;

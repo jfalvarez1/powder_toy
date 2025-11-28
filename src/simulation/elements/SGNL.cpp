@@ -31,11 +31,11 @@ void Element::Element_SGNL()
 	Weight = 100;
 
 	DefaultProperties.temp = R_TEMP + 273.15f;
-	DefaultProperties.tmp = 10;   // Frequency (1-100, higher = faster oscillation)
-	DefaultProperties.tmp2 = 0;   // Waveform: 0=square, 1=sine, 2=sawtooth, 3=pulse
+	DefaultProperties.tmp = 10;   // Frequency (1-100)
+	DefaultProperties.tmp2 = 0;   // Waveform type
 	DefaultProperties.life = 0;   // Phase counter
 	HeatConduct = 0;
-	Description = "Signal generator. Outputs oscillating AC signal. Tmp=frequency, Tmp2=waveform.";
+	Description = "Signal Generator. PSCN=freq+, NSCN=freq-. Tmp=freq(1-100). Tmp2=wave(0-6):SQR,SIN,SAW,PLS,TRI,RMP,RND";
 
 	Properties = TYPE_SOLID;
 
@@ -57,10 +57,44 @@ static int update(UPDATE_FUNC_ARGS)
 	int frequency = parts[i].tmp;
 	if (frequency < 1) frequency = 1;
 	if (frequency > 100) frequency = 100;
-	parts[i].tmp = frequency;
 
-	int waveform = parts[i].tmp2 % 4;
+	int waveform = parts[i].tmp2 % 7;  // 7 waveform types
+	if (waveform < 0) waveform = 0;
 	parts[i].tmp2 = waveform;
+
+	// Check for frequency adjustment controls
+	for (auto rx = -1; rx <= 1; rx++)
+	{
+		for (auto ry = -1; ry <= 1; ry++)
+		{
+			if (rx || ry)
+			{
+				auto r = pmap[y+ry][x+rx];
+				if (!r) continue;
+				auto rt = TYP(r);
+				auto rID = ID(r);
+
+				// PSCN spark = increase frequency
+				if (rt == PT_SPRK && parts[rID].ctype == PT_PSCN && parts[rID].life == 3)
+				{
+					if (frequency < 100) frequency++;
+				}
+				// NSCN spark = decrease frequency
+				if (rt == PT_SPRK && parts[rID].ctype == PT_NSCN && parts[rID].life == 3)
+				{
+					if (frequency > 1) frequency--;
+				}
+				// METL spark = cycle waveform
+				if (rt == PT_SPRK && parts[rID].ctype == PT_METL && parts[rID].life == 3)
+				{
+					waveform = (waveform + 1) % 7;
+					parts[i].tmp2 = waveform;
+				}
+			}
+		}
+	}
+
+	parts[i].tmp = frequency;
 
 	// Increment phase
 	parts[i].life += frequency;
@@ -77,21 +111,42 @@ static int update(UPDATE_FUNC_ARGS)
 			output = (phase < 500) ? 100 : 0;
 			break;
 
-		case 1:  // Sine wave (approximated)
+		case 1:  // Sine wave
 		{
 			float angle = (phase / 1000.0f) * 2.0f * 3.14159f;
 			output = (int)(50 + 50 * sin(angle));
 			break;
 		}
 
-		case 2:  // Sawtooth
+		case 2:  // Sawtooth (ramp up)
 			output = phase / 10;
 			break;
 
-		case 3:  // Pulse (short duty cycle)
+		case 3:  // Pulse (10% duty cycle)
 			output = (phase < 100) ? 100 : 0;
 			break;
+
+		case 4:  // Triangle wave
+			if (phase < 500)
+				output = phase / 5;
+			else
+				output = (1000 - phase) / 5;
+			break;
+
+		case 5:  // Ramp down (inverse sawtooth)
+			output = 100 - (phase / 10);
+			break;
+
+		case 6:  // Random/noise
+			if (sim->rng.chance(frequency, 100))
+				output = sim->rng.between(0, 100);
+			else
+				output = 0;
+			break;
 	}
+
+	// Store output for probes to read (use tmp3)
+	sim->parts[i].tmp3 = output;
 
 	// Output spark when output is high
 	if (output > 50)
@@ -132,52 +187,59 @@ static int update(UPDATE_FUNC_ARGS)
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
 	int phase = cpart->life;
-	int waveform = cpart->tmp2 % 4;
-	int frequency = cpart->tmp;
+	int waveform = cpart->tmp2 % 7;
+	// int frequency = cpart->tmp;  // Unused but kept for reference
 
-	// Orange base
-	*colr = 255;
-	*colg = 102;
-	*colb = 0;
-
-	// Pulse effect based on phase
+	// Calculate output for display
 	int output = 0;
 	switch (waveform)
 	{
-		case 0:
-			output = (phase < 500) ? 100 : 0;
+		case 0: output = (phase < 500) ? 100 : 0; break;
+		case 1: output = (int)(50 + 50 * sin((phase / 1000.0f) * 2.0f * 3.14159f)); break;
+		case 2: output = phase / 10; break;
+		case 3: output = (phase < 100) ? 100 : 0; break;
+		case 4: output = (phase < 500) ? phase / 5 : (1000 - phase) / 5; break;
+		case 5: output = 100 - (phase / 10); break;
+		case 6: output = 50; break;  // Random shows as medium
+	}
+
+	// Different base colors for each waveform type
+	switch (waveform)
+	{
+		case 0:  // Square - Orange
+			*colr = 255; *colg = 100; *colb = 0;
 			break;
-		case 1:
-		{
-			float angle = (phase / 1000.0f) * 2.0f * 3.14159f;
-			output = (int)(50 + 50 * sin(angle));
+		case 1:  // Sine - Blue-ish
+			*colr = 200; *colg = 100; *colb = 150;
 			break;
-		}
-		case 2:
-			output = phase / 10;
+		case 2:  // Sawtooth - Green-ish
+			*colr = 200; *colg = 180; *colb = 0;
 			break;
-		case 3:
-			output = (phase < 100) ? 100 : 0;
+		case 3:  // Pulse - Red
+			*colr = 255; *colg = 50; *colb = 50;
+			break;
+		case 4:  // Triangle - Cyan-ish
+			*colr = 150; *colg = 200; *colb = 150;
+			break;
+		case 5:  // Ramp down - Purple-ish
+			*colr = 200; *colg = 100; *colb = 200;
+			break;
+		case 6:  // Random - White-ish
+			*colr = 200; *colg = 200; *colb = 200;
 			break;
 	}
 
 	// Brightness varies with output
-	if (output > 50)
-	{
-		*firea = output / 2;
-		*firer = 255;
-		*fireg = 150;
-		*fireb = 0;
-		*pixel_mode |= FIRE_ADD;
-	}
+	float intensity = output / 100.0f;
+	*firea = (int)(60 * intensity);
+	*firer = *colr;
+	*fireg = *colg;
+	*fireb = *colb;
+	*pixel_mode |= FIRE_ADD;
 
-	// Waveform indicator color tint
-	switch (waveform)
+	if (output > 70)
 	{
-		case 0: break;  // Square - no tint
-		case 1: *colb = 50; break;  // Sine - slight blue
-		case 2: *colg = 150; break;  // Sawtooth - more green
-		case 3: *colr = 200; *colg = 50; break;  // Pulse - more red
+		*pixel_mode |= PMODE_GLOW;
 	}
 
 	return 0;

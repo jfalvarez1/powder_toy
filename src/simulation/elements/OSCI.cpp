@@ -8,7 +8,7 @@ void Element::Element_OSCI()
 {
 	Identifier = "DEFAULT_PT_OSCI";
 	Name = "OSCI";
-	Colour = 0x001100_rgb;
+	Colour = 0x002200_rgb;
 	MenuVisible = 1;
 	MenuSection = SC_ELEC;
 	Enabled = 1;
@@ -31,11 +31,11 @@ void Element::Element_OSCI()
 	Weight = 100;
 
 	DefaultProperties.temp = R_TEMP + 273.15f;
-	DefaultProperties.tmp = 0;    // Waveform history (24-bit, 6 samples of 4 bits each)
-	DefaultProperties.tmp2 = 0;   // Current display value
-	DefaultProperties.life = 0;   // Frame counter for animation
+	DefaultProperties.tmp = 0;    // Row assignment (0=auto from Y pos, 1-10=fixed row)
+	DefaultProperties.tmp2 = 0;   // Current brightness level
+	DefaultProperties.life = 0;   // History buffer
 	HeatConduct = 50;
-	Description = "Oscilloscope display. Place near PROB to show waveforms. Shows signal history as color pattern.";
+	Description = "Oscilloscope. Place 10 tall near PROB. Each row lights when signal matches. Tmp=row(0=auto,1-10=fixed).";
 
 	Properties = TYPE_SOLID;
 
@@ -54,146 +54,193 @@ void Element::Element_OSCI()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	// Find nearby probes and get their waveform data
-	int probeData[4] = {0, 0, 0, 0};  // Up to 4 channels
-	bool hasProbe = false;
+	int rowSetting = parts[i].tmp;
+	if (rowSetting < 0) rowSetting = 0;
+	if (rowSetting > 10) rowSetting = 10;
+	parts[i].tmp = rowSetting;
 
-	for (auto rx = -5; rx <= 5; rx++)
+	// Find row number for this pixel
+	// If rowSetting > 0, use fixed row
+	// If rowSetting == 0, auto-detect based on Y position relative to OSCI column
+	int myRow = 0;
+	int displayHeight = 10;  // Default display height
+
+	if (rowSetting > 0)
+	{
+		myRow = rowSetting - 1;  // Convert 1-10 to 0-9
+	}
+	else
+	{
+		// Auto mode: find lowest OSCI in this column and calculate row
+		int lowestY = y;
+		int highestY = y;
+
+		// Search for other OSCI in this column
+		for (int scanY = std::max(0, y - 20); scanY < std::min(YRES, y + 20); scanY++)
+		{
+			auto r = pmap[scanY][x];
+			if (r && TYP(r) == PT_OSCI)
+			{
+				if (scanY > lowestY) lowestY = scanY;
+				if (scanY < highestY) highestY = scanY;
+			}
+		}
+
+		displayHeight = lowestY - highestY + 1;
+		if (displayHeight < 1) displayHeight = 1;
+		if (displayHeight > 20) displayHeight = 20;
+
+		// My row is based on position (bottom = row 0, top = row max)
+		myRow = lowestY - y;
+		if (myRow < 0) myRow = 0;
+		if (myRow >= displayHeight) myRow = displayHeight - 1;
+	}
+
+	// Find nearby probes and get their signals
+	int probeSignal = 0;
+	int probeChannel = 0;
+	bool foundProbe = false;
+
+	for (auto rx = -10; rx <= 10; rx++)
 	{
 		for (auto ry = -5; ry <= 5; ry++)
 		{
-			if (rx || ry)
+			if (x + rx < 0 || x + rx >= XRES || y + ry < 0 || y + ry >= YRES)
+				continue;
+
+			auto r = pmap[y+ry][x+rx];
+			if (!r) continue;
+			auto rt = TYP(r);
+			auto rID = ID(r);
+
+			if (rt == PT_PROB)
 			{
-				if (x + rx < 0 || x + rx >= XRES || y + ry < 0 || y + ry >= YRES)
-					continue;
+				probeSignal = parts[rID].tmp3;
+				probeChannel = parts[rID].tmp4;
+				foundProbe = true;
+				break;
+			}
 
-				auto r = pmap[y+ry][x+rx];
-				if (!r)
-					continue;
-				auto rt = TYP(r);
-				auto rID = ID(r);
-
-				// Get data from probe
-				if (rt == PT_PROB)
-				{
-					int channel = parts[rID].tmp % 4;
-					int value = parts[rID].tmp2;
-					probeData[channel] = std::max(probeData[channel], value);
-					hasProbe = true;
-				}
-
-				// Also sample directly from nearby electronics if no probe
-				if (!hasProbe)
-				{
-					if (rt == PT_SPRK)
-					{
-						probeData[0] = std::max(probeData[0], parts[rID].life * 30);
-					}
-					if (rt == PT_VCCS)
-					{
-						probeData[1] = std::max(probeData[1], (int)parts[rID].tmp2 / 2);
-					}
-					if (rt == PT_SGNL)
-					{
-						int phase = parts[rID].life;
-						int waveform = parts[rID].tmp2 % 4;
-						int output = 0;
-						switch (waveform)
-						{
-							case 0: output = (phase < 500) ? 100 : 0; break;
-							case 1: output = (int)(50 + 50 * sin(phase / 1000.0f * 2 * 3.14159f)); break;
-							case 2: output = phase / 10; break;
-							case 3: output = (phase < 100) ? 100 : 0; break;
-						}
-						probeData[2] = std::max(probeData[2], output);
-					}
-				}
+			// Also sample directly from SGNL if no probe
+			if (!foundProbe && rt == PT_SGNL)
+			{
+				probeSignal = parts[rID].tmp3;
+				probeChannel = 0;
 			}
 		}
+		if (foundProbe) break;
 	}
 
-	// Combine probe data into display value
-	// Use different bits for different channels
-	int combined = 0;
-	combined |= (probeData[0] / 16) & 0xF;         // Ch0 in bits 0-3
-	combined |= ((probeData[1] / 16) & 0xF) << 4;  // Ch1 in bits 4-7
-	combined |= ((probeData[2] / 16) & 0xF) << 8;  // Ch2 in bits 8-11
-	combined |= ((probeData[3] / 16) & 0xF) << 12; // Ch3 in bits 12-15
+	// Calculate if this row should be lit based on signal level
+	// Signal 0-100 maps to rows 0 to (displayHeight-1)
+	int signalRow = (probeSignal * displayHeight) / 101;  // 101 to handle 100 properly
+	if (signalRow >= displayHeight) signalRow = displayHeight - 1;
 
-	// Shift waveform history
-	parts[i].tmp = ((parts[i].tmp << 4) | ((combined & 0xF0) >> 4)) & 0xFFFFFF;
-	parts[i].tmp2 = combined;
+	// Light up if we match the signal row (with some tolerance for smoother display)
+	int brightness = 0;
+	int rowDiff = abs(myRow - signalRow);
 
-	// Increment frame counter for animation
-	parts[i].life = (parts[i].life + 1) % 60;
+	if (rowDiff == 0)
+	{
+		brightness = 100;  // Direct hit
+	}
+	else if (rowDiff == 1)
+	{
+		brightness = 40;   // Adjacent row (for trail effect)
+	}
+
+	// Store brightness and channel info
+	parts[i].tmp2 = brightness;
+	parts[i].tmp3 = probeChannel;
+	parts[i].tmp4 = myRow;
+
+	// Shift history for trace effect
+	parts[i].life = ((parts[i].life << 2) | (brightness > 50 ? 3 : (brightness > 0 ? 1 : 0))) & 0xFFFF;
 
 	return 0;
 }
 
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
-	int combined = cpart->tmp2;
-	int history = cpart->tmp;
-	int frame = cpart->life;
+	int brightness = cpart->tmp2;
+	int channel = cpart->tmp3 % 4;
+	int history = cpart->life;
 
-	// Extract channel values
-	int ch0 = (combined & 0xF) * 16;
-	int ch1 = ((combined >> 4) & 0xF) * 16;
-	int ch2 = ((combined >> 8) & 0xF) * 16;
-	int ch3 = ((combined >> 12) & 0xF) * 16;
-
-	// Dark green screen background
+	// Dark screen background
 	*colr = 0;
-	*colg = 17 + frame / 6;  // Slight flicker
+	*colg = 20;
 	*colb = 0;
 
-	// Mix colors based on active channels
-	// Ch0 = Yellow, Ch1 = Cyan, Ch2 = Magenta, Ch3 = Green
-	int totalSignal = ch0 + ch1 + ch2 + ch3;
-
-	if (totalSignal > 0)
+	// Channel-based trace color
+	int traceR, traceG, traceB;
+	switch (channel)
 	{
-		// Calculate mixed color from all channels
-		int mixR = (ch0 * 255 + ch2 * 255) / 512;
-		int mixG = (ch0 * 255 + ch1 * 255 + ch3 * 255) / 768;
-		int mixB = (ch1 * 255 + ch2 * 255) / 512;
+		case 0:  // Yellow trace
+			traceR = 255; traceG = 255; traceB = 0;
+			break;
+		case 1:  // Cyan trace
+			traceR = 0; traceG = 255; traceB = 255;
+			break;
+		case 2:  // Magenta trace
+			traceR = 255; traceG = 0; traceB = 255;
+			break;
+		case 3:  // Green trace
+			traceR = 0; traceG = 255; traceB = 0;
+			break;
+		default:
+			traceR = 0; traceG = 255; traceB = 0;
+			break;
+	}
 
-		// Add to base color
-		*colr = std::min(mixR, 255);
-		*colg = std::min(17 + mixG, 255);
-		*colb = std::min(mixB, 255);
+	// Light up based on brightness
+	if (brightness > 0)
+	{
+		float intensity = brightness / 100.0f;
+
+		// Mix trace color with intensity
+		*colr = (int)(traceR * intensity);
+		*colg = std::max(20, (int)(traceG * intensity));
+		*colb = (int)(traceB * intensity);
 
 		// Phosphor glow effect
-		float intensity = std::min(totalSignal / 400.0f, 1.0f);
-		*firea = (int)(60 * intensity);
-		*firer = *colr;
-		*fireg = *colg;
-		*fireb = *colb;
+		*firea = (int)(100 * intensity);
+		*firer = traceR;
+		*fireg = traceG;
+		*fireb = traceB;
 		*pixel_mode |= FIRE_ADD;
 
-		// Scan line effect based on history
-		int histBit = (history >> ((frame / 10) * 4)) & 0xF;
-		if (histBit > 8)
+		if (brightness > 70)
 		{
 			*pixel_mode |= PMODE_GLOW;
 		}
 	}
-
-	// Trace line visualization - show waveform pattern
-	// Extract 6 samples from history (4 bits each)
-	int samples[6];
-	for (int s = 0; s < 6; s++)
+	else
 	{
-		samples[s] = (history >> (s * 4)) & 0xF;
-	}
+		// Check history for persistence/afterglow
+		int recentHits = 0;
+		for (int h = 0; h < 8; h++)
+		{
+			if ((history >> (h * 2)) & 3)
+				recentHits++;
+		}
 
-	// Create visual pattern based on waveform
-	int waveHeight = samples[frame / 10] * 16;
-	if (waveHeight > 0)
-	{
-		*colg = std::min(*colg + waveHeight / 2, 255);
-		*firea += waveHeight / 4;
-		*fireg = std::min(*fireg + waveHeight, 255);
+		if (recentHits > 0)
+		{
+			// Fading afterglow
+			float afterglow = recentHits / 16.0f;
+			*colr = (int)(traceR * afterglow * 0.3f);
+			*colg = std::max(20, (int)(traceG * afterglow * 0.3f));
+			*colb = (int)(traceB * afterglow * 0.3f);
+
+			if (recentHits > 2)
+			{
+				*firea = recentHits * 5;
+				*firer = traceR / 2;
+				*fireg = traceG / 2;
+				*fireb = traceB / 2;
+				*pixel_mode |= FIRE_ADD;
+			}
+		}
 	}
 
 	return 0;
