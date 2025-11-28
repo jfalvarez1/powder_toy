@@ -52,8 +52,8 @@ void Element::Element_RKVP()
 static int graphics(GRAPHICS_FUNC_ARGS)
 {
 	*colr = 0xFF;
-	*colg = 0x60 + (cpart->temp - 3000) / 50;
-	*colb = 0x30 + (cpart->temp - 3000) / 100;
+	*colg = 0x60 + int((cpart->temp - 3000) / 50);
+	*colb = 0x30 + int((cpart->temp - 3000) / 100);
 	if (*colg > 0xFF) *colg = 0xFF;
 	if (*colb > 0xFF) *colb = 0xFF;
 	*firea = 80;
