@@ -599,7 +599,10 @@ int Main(int argc, char *argv[])
 		Platform::MarkPresentable();
 	}
 
+	std::cout << "DEBUG: About to enter MainLoop()" << std::endl;
+	std::cout << "DEBUG: Engine running = " << (ui::Engine::Ref().Running() ? "true" : "false") << std::endl;
 	MainLoop();
+	std::cout << "DEBUG: MainLoop() exited" << std::endl;
 
 	Platform::Exit(0);
 	return 0;

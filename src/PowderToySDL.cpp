@@ -131,14 +131,17 @@ void UpdateRefreshRate()
 
 void SDLOpen()
 {
+	std::cout << "DEBUG: SDLOpen() starting" << std::endl;
 	if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0)
 	{
 		fprintf(stderr, "Initializing SDL (video subsystem): %s\n", SDL_GetError());
 		Platform::Exit(-1);
 	}
+	std::cout << "DEBUG: SDL video initialized" << std::endl;
 	Clipboard::Init();
 
 	SDLSetScreen();
+	std::cout << "DEBUG: SDLSetScreen() completed, sdl_window=" << (sdl_window ? "valid" : "null") << std::endl;
 
 	int displayIndex = SDL_GetWindowDisplayIndex(sdl_window);
 	if (displayIndex >= 0)
@@ -153,6 +156,7 @@ void SDLOpen()
 	UpdateRefreshRate();
 
 	StopTextInput();
+	std::cout << "DEBUG: SDLOpen() completed" << std::endl;
 }
 
 void SDLClose()
