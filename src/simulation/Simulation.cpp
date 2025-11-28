@@ -2452,7 +2452,18 @@ void Simulation::MergeCellUpdates()
 
 void Simulation::ProcessPendingKills()
 {
-	// Process all deferred particle kills
+	// Process lock-free kill queue first
+	int queueCount = killQueueCount.load(std::memory_order_acquire);
+	for (int i = 0; i < queueCount; i++)
+	{
+		int particleIdx = killQueue[i].load(std::memory_order_relaxed);
+		if (parts[particleIdx].type)
+		{
+			kill_part(particleIdx);
+		}
+	}
+
+	// Process overflow kills (mutex-protected during insertion)
 	for (int i : pendingKills)
 	{
 		if (parts[i].type)
@@ -2461,7 +2472,10 @@ void Simulation::ProcessPendingKills()
 		}
 	}
 	pendingKills.clear();
-	parallelKillCount.store(0);
+
+	// Reset queues
+	killQueueHead.store(0, std::memory_order_relaxed);
+	killQueueCount.store(0, std::memory_order_relaxed);
 }
 
 void Simulation::ProcessTile(int tileIdx, int threadId, bool skipElementCallbacks)
@@ -2646,9 +2660,10 @@ void Simulation::UpdateParticlesParallel()
 		cellUpdateBuffers.resize(numThreads);
 	}
 
-	// Clear pending kills
+	// Clear kill queues
+	killQueueHead.store(0, std::memory_order_relaxed);
+	killQueueCount.store(0, std::memory_order_relaxed);
 	pendingKills.clear();
-	parallelKillCount.store(0);
 
 	// ===== TWO-PHASE UPDATE FOR MAXIMUM PARALLELISM =====
 	// Phase 1: Parallel physics (velocity, cell updates) - uses all CPU cores
@@ -2726,11 +2741,22 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 		auto x = int(parts[i].x + 0.5f);
 		auto y = int(parts[i].y + 0.5f);
 
-		// Optimized bounds check
-		if (!IsInBounds(x, y))
+		// Optimized bounds check - use lock-free queue for kills
+		if (UNLIKELY(!IsInBounds(x, y)))
 		{
-			std::lock_guard<std::mutex> lock(killPartMutex);
-			pendingKills.push_back(i);
+			// Lock-free push to kill queue
+			int idx = killQueueHead.fetch_add(1, std::memory_order_relaxed);
+			if (LIKELY(idx < KILL_QUEUE_CAPACITY))
+			{
+				killQueue[idx].store(i, std::memory_order_relaxed);
+				killQueueCount.fetch_add(1, std::memory_order_release);
+			}
+			else
+			{
+				// Fallback to mutex for overflow
+				std::lock_guard<std::mutex> lock(killPartMutex);
+				pendingKills.push_back(i);
+			}
 			continue;
 		}
 
@@ -2738,10 +2764,10 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 		int cx = FastCellCoord(x);
 
 		// Prefetch cell data for next iteration
-		if (i + 1 < end && parts[i + 1].type)
+		if (LIKELY(i + 1 < end && parts[i + 1].type))
 		{
-			int nextX = int(parts[i + 1].x + 0.5f);
-			int nextY = int(parts[i + 1].y + 0.5f);
+			int nextX = FastRound(parts[i + 1].x);
+			int nextY = FastRound(parts[i + 1].y);
 			int nextCy = FastCellCoord(nextY);
 			int nextCx = FastCellCoord(nextX);
 			PREFETCH_READ(&vx[nextCy][nextCx]);
@@ -2749,9 +2775,9 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 			PREFETCH_READ(&bmap[nextCy][nextCx]);
 		}
 
-		// Check walls - defer kill
+		// Check walls - use lock-free queue for kills
 		auto wallType = bmap[cy][cx];
-		if (wallType &&
+		if (UNLIKELY(wallType &&
 		   (wallType==WL_WALL ||
 		    wallType==WL_WALLELEC ||
 		    wallType==WL_ALLOWAIR ||
@@ -2760,10 +2786,19 @@ void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
 		    (wallType==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
 		    (wallType==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
 		    (wallType==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
-		    (wallType==WL_EWALL && !emap[cy][cx])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		    (wallType==WL_EWALL && !emap[cy][cx])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH)))
 		{
-			std::lock_guard<std::mutex> lock(killPartMutex);
-			pendingKills.push_back(i);
+			int idx = killQueueHead.fetch_add(1, std::memory_order_relaxed);
+			if (LIKELY(idx < KILL_QUEUE_CAPACITY))
+			{
+				killQueue[idx].store(i, std::memory_order_relaxed);
+				killQueueCount.fetch_add(1, std::memory_order_release);
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(killPartMutex);
+				pendingKills.push_back(i);
+			}
 			continue;
 		}
 

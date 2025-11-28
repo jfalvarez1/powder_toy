@@ -153,9 +153,16 @@ public:
 	std::vector<RNG> threadRngs; // Per-thread RNGs for parallel processing
 	std::vector<CellUpdateBuffer> cellUpdateBuffers; // Thread-local cell update accumulators
 	std::vector<std::vector<int>> particlesInTile; // Particles indexed by spatial tile
-	std::mutex killPartMutex; // Mutex for thread-safe particle killing
-	std::vector<int> pendingKills; // Particles to kill after parallel phase
-	std::atomic<int> parallelKillCount{0}; // Count of pending kills
+
+	// Lock-free kill queue (avoids mutex contention in parallel phase)
+	static constexpr int KILL_QUEUE_CAPACITY = 8192;
+	std::array<std::atomic<int>, KILL_QUEUE_CAPACITY> killQueue;
+	std::atomic<int> killQueueHead{0};
+	std::atomic<int> killQueueCount{0};
+
+	// Fallback mutex for overflow
+	std::mutex killPartMutex;
+	std::vector<int> pendingKills;
 
 	int replaceModeSelected = 0;
 	int replaceModeFlags = 0;
