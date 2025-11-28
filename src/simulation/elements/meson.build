@@ -277,6 +277,10 @@ simulation_elem_names = [
 	'OPAM',
 	'POTM',
 	'RLAY',
+	'VOLT',
+	'AMPR',
+	'PROB',
+	'OSCI',
 ]
 
 simulation_elem_src = []
