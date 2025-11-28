@@ -56,6 +56,21 @@ Fixed physics bugs where particles would disappear instead of transitioning to a
 | **GEL** | Added FGEL (freeze) and WTRV (decompose) transitions |
 | **ISOZ** | High temp transition → ISVP |
 
+### 4. Initialization Order Bug Fix
+
+Fixed a startup crash caused by incorrect initialization order in `PowderToy.cpp`:
+
+**Problem**: The `Simulation` constructor (used by `SaveRenderer`) now calls `InitElementCategories()` and `InitElementTransitionTemps()` which require `SimulationData` to be initialized. However, `SaveRenderer` was being created before `SimulationData`.
+
+**Solution**: Moved `SimulationData` creation to occur before `SaveRenderer` in the initialization sequence.
+
+```cpp
+// SimulationData must be created before SaveRenderer since Simulation constructor needs element data
+explicitSingletons->simulationData = std::make_unique<SimulationData>();
+
+explicitSingletons->saveRenderer = std::make_unique<SaveRenderer>();
+```
+
 ## Key Technical Concepts
 
 ### Phase Transitions in TPT
