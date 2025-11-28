@@ -2627,8 +2627,7 @@ void Simulation::UpdateParticlesParallel()
 		return;
 	}
 
-	auto &pool = ThreadPool::Ref();
-	int numThreads = static_cast<int>(pool.GetThreadCount());
+	int numThreads = static_cast<int>(ThreadPool::Ref().GetThreadCount());
 
 	// Initialize thread-local resources if needed
 	if (threadRngs.size() != static_cast<size_t>(numThreads))
@@ -2650,65 +2649,223 @@ void Simulation::UpdateParticlesParallel()
 	pendingKills.clear();
 	parallelKillCount.store(0);
 
-	// Build spatial index
-	BuildSpatialIndex();
+	// ===== TWO-PHASE UPDATE FOR MAXIMUM PARALLELISM =====
+	// Phase 1: Parallel physics (velocity, cell updates) - uses all CPU cores
+	// Phase 2: Sequential element callbacks (modifies global state)
 
-	// Process tiles using checkerboard pattern to minimize conflicts
-	// Phase 1: Process even tiles (tiles where (tileX + tileY) is even)
-	// Phase 2: Process odd tiles (tiles where (tileX + tileY) is odd)
+	int particleCount = parts.active;
+	int chunkSize = (particleCount + numThreads - 1) / numThreads;
 
-	// Collect even and odd tile indices
-	std::vector<int> evenTiles, oddTiles;
-	evenTiles.reserve(TOTAL_TILES / 2 + 1);
-	oddTiles.reserve(TOTAL_TILES / 2 + 1);
+	// Phase 1: Launch threads for parallel physics
+	std::vector<std::thread> threads;
+	threads.reserve(numThreads);
 
-	for (int tileY = 0; tileY < TILES_Y; tileY++)
+	for (int t = 0; t < numThreads; t++)
 	{
-		for (int tileX = 0; tileX < TILES_X; tileX++)
-		{
-			int tileIdx = tileY * TILES_X + tileX;
-			if ((tileX + tileY) % 2 == 0)
-				evenTiles.push_back(tileIdx);
-			else
-				oddTiles.push_back(tileIdx);
-		}
+		int start = t * chunkSize;
+		int end = std::min(start + chunkSize, particleCount);
+		if (start >= end)
+			break;
+
+		threads.emplace_back([this, start, end, t]() {
+			ParallelPhysicsPass(start, end, t);
+		});
 	}
 
-	// Phase 1: Process even tiles in parallel
-	int evenCount = static_cast<int>(evenTiles.size());
-	pool.ParallelFor(0, evenCount, [this, &evenTiles](int start, int end) {
-		// Determine thread ID from work range
-		int threadId = 0;
-		if (!threadRngs.empty())
-		{
-			// Use a simple hash of start position to get consistent thread ID
-			threadId = start % static_cast<int>(threadRngs.size());
-		}
-		for (int i = start; i < end; i++)
-		{
-			ProcessTile(evenTiles[i], threadId, false);
-		}
-	});
-
-	// Phase 2: Process odd tiles in parallel
-	int oddCount = static_cast<int>(oddTiles.size());
-	pool.ParallelFor(0, oddCount, [this, &oddTiles](int start, int end) {
-		int threadId = 0;
-		if (!threadRngs.empty())
-		{
-			threadId = start % static_cast<int>(threadRngs.size());
-		}
-		for (int i = start; i < end; i++)
-		{
-			ProcessTile(oddTiles[i], threadId, false);
-		}
-	});
+	// Wait for all physics threads
+	for (auto &thread : threads)
+	{
+		thread.join();
+	}
 
 	// Merge cell updates from all threads
 	MergeCellUpdates();
 
 	// Process deferred particle kills
 	ProcessPendingKills();
+
+	// Phase 2: Sequential element callbacks and movement
+	SequentialElementPass();
+}
+
+void Simulation::ParallelPhysicsPass(int start, int end, int threadId)
+{
+	RNG &localRng = (threadId >= 0 && threadId < static_cast<int>(threadRngs.size()))
+		? threadRngs[threadId] : rng;
+
+	CellUpdateBuffer *cellBuf = nullptr;
+	if (threadId >= 0 && threadId < static_cast<int>(cellUpdateBuffers.size()))
+	{
+		cellBuf = &cellUpdateBuffers[threadId];
+	}
+
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	for (int i = start; i < end; i++)
+	{
+		auto t = parts[i].type;
+		if (!t)
+			continue;
+
+		auto x = int(parts[i].x + 0.5f);
+		auto y = int(parts[i].y + 0.5f);
+
+		// Check bounds - defer kill
+		if (x < CELL || y < CELL || x >= XRES - CELL || y >= YRES - CELL)
+		{
+			std::lock_guard<std::mutex> lock(killPartMutex);
+			pendingKills.push_back(i);
+			continue;
+		}
+
+		// Check walls - defer kill
+		if (bmap[y/CELL][x/CELL] &&
+		   (bmap[y/CELL][x/CELL]==WL_WALL ||
+		    bmap[y/CELL][x/CELL]==WL_WALLELEC ||
+		    bmap[y/CELL][x/CELL]==WL_ALLOWAIR ||
+		    (bmap[y/CELL][x/CELL]==WL_DESTROYALL) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWLIQUID && !(elements[t].Properties&TYPE_LIQUID)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWPOWDER && !(elements[t].Properties&TYPE_PART)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWGAS && !(elements[t].Properties&TYPE_GAS)) ||
+		    (bmap[y/CELL][x/CELL]==WL_ALLOWENERGY && !(elements[t].Properties&TYPE_ENERGY)) ||
+		    (bmap[y/CELL][x/CELL]==WL_EWALL && !emap[y/CELL][x/CELL])) && (t!=PT_STKM) && (t!=PT_STKM2) && (t!=PT_FIGH))
+		{
+			std::lock_guard<std::mutex> lock(killPartMutex);
+			pendingKills.push_back(i);
+			continue;
+		}
+
+		// Stasis check
+		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL] < 8)
+			continue;
+
+		int cy = y / CELL;
+		int cx = x / CELL;
+
+		// Accumulate cell velocity changes (thread-local, no contention)
+		if (cellBuf)
+		{
+			float airLossContrib = vx[cy][cx] * (elements[t].AirLoss - 1.0f);
+			float airDragContrib = elements[t].AirDrag * parts[i].vx;
+			cellBuf->dvx[cy][cx] += airLossContrib + airDragContrib;
+
+			airLossContrib = vy[cy][cx] * (elements[t].AirLoss - 1.0f);
+			airDragContrib = elements[t].AirDrag * parts[i].vy;
+			cellBuf->dvy[cy][cx] += airLossContrib + airDragContrib;
+
+			if (elements[t].HotAir)
+			{
+				if (t == PT_GAS || t == PT_NBLE)
+				{
+					float contribution = elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx]);
+					cellBuf->dpv[cy][cx] += contribution;
+					if (cy + 1 < YCELLS)
+						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx]);
+					if (cx + 1 < XCELLS)
+					{
+						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy][cx + 1]);
+						if (cy + 1 < YCELLS)
+							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir * std::max(0.0f, 3.5f - pv[cy + 1][cx + 1]);
+					}
+				}
+				else
+				{
+					cellBuf->dpv[cy][cx] += elements[t].HotAir;
+					if (cy + 1 < YCELLS)
+						cellBuf->dpv[cy + 1][cx] += elements[t].HotAir;
+					if (cx + 1 < XCELLS)
+					{
+						cellBuf->dpv[cy][cx + 1] += elements[t].HotAir;
+						if (cy + 1 < YCELLS)
+							cellBuf->dpv[cy + 1][cx + 1] += elements[t].HotAir;
+					}
+				}
+			}
+		}
+
+		// Get gravity field
+		float pGravX = 0, pGravY = 0;
+		GetGravityField(x, y, elements[t].Gravity, elements[t].NewtonianGravity, pGravX, pGravY);
+
+		// Apply velocity loss
+		if (t != PT_SPNG || !(parts[i].flags & FLAG_MOVABLE))
+		{
+			parts[i].vx *= elements[t].Loss;
+			parts[i].vy *= elements[t].Loss;
+		}
+
+		// Apply advection and gravity
+		parts[i].vx += elements[t].Advection * vx[cy][cx] + pGravX;
+		parts[i].vy += elements[t].Advection * vy[cy][cx] + pGravY;
+
+		// Apply diffusion
+		if (elements[t].Diffusion)
+		{
+			parts[i].vx += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+			parts[i].vy += elements[t].Diffusion * (2.0f * localRng.uniform01() - 1.0f);
+		}
+	}
+}
+
+void Simulation::SequentialElementPass()
+{
+	auto &sd = SimulationData::CRef();
+	auto &elements = sd.elements;
+
+	for (int i = 0; i < parts.active; i++)
+	{
+		auto t = parts[i].type;
+		if (!t)
+			continue;
+
+		auto x = int(parts[i].x + 0.5f);
+		auto y = int(parts[i].y + 0.5f);
+
+		// Bounds check
+		if (x < CELL || y < CELL || x >= XRES - CELL || y >= YRES - CELL)
+			continue;
+
+		// Stasis check
+		if (bmap[y/CELL][x/CELL] == WL_STASIS && emap[y/CELL][x/CELL] < 8)
+			continue;
+
+		if (bmap[y/CELL][x/CELL] == WL_DETECT && emap[y/CELL][x/CELL] < 8)
+			set_emap(x/CELL, y/CELL);
+
+		auto neighbourhood = GetNeighbourhood(i);
+
+		// Temperature transitions
+		auto transitionOccurred = TransitionPhase(i, neighbourhood);
+		if (!parts[i].type)
+			continue;
+		if (transitionOccurred)
+			t = parts[i].type;
+
+		// Element update callback
+		if (elements[t].Update)
+		{
+			if ((*(elements[t].Update))(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap))
+				continue;
+			x = int(parts[i].x + 0.5f);
+			y = int(parts[i].y + 0.5f);
+		}
+
+		if (legacy_enable)
+			Element::legacyUpdate(this, i, x, y, neighbourhood.surround_space, neighbourhood.nt, parts, pmap);
+
+		if (parts[i].type == PT_NONE)
+			continue;
+
+		if (transitionOccurred)
+			continue;
+
+		if (!parts[i].vx && !parts[i].vy)
+			continue;
+
+		// Movement phase
+		MovementPhase(i, neighbourhood);
+	}
 }
 
 void Simulation::UpdateParticlesInStrip(int start, int end, int threadId)

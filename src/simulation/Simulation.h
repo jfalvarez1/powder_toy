@@ -22,6 +22,7 @@
 #include <optional>
 #include <atomic>
 #include <mutex>
+#include <thread>
 
 constexpr int CHANNELS = int(MAX_TEMP - 73) / 100 + 2;
 
@@ -252,14 +253,14 @@ public:
 	void set_emap(int x, int y);
 	int parts_avg(int ci, int ni, int t);
 	void UpdateParticles(int start, int end); // Dispatches an update to the range [start, end).
-	void UpdateParticlesParallel(); // Parallel version using spatial chunking
+	void UpdateParticlesParallel(); // Parallel version using two-phase update
 	void UpdateParticlesInStrip(int stripStart, int stripEnd, int threadId); // Update particles in Y-strip
 	void BuildSpatialIndex(); // Build tile-based spatial index for particles
 	void ProcessTile(int tileIdx, int threadId, bool skipElementCallbacks); // Process all particles in a tile
 	void MergeCellUpdates(); // Merge thread-local cell updates into main arrays
 	void ProcessPendingKills(); // Process deferred particle kills
-	void ParallelPhysicsUpdate(); // Physics-only parallel update (movement, velocity)
-	void SequentialElementUpdate(); // Sequential element callback phase
+	void ParallelPhysicsPass(int start, int end, int threadId); // Parallel physics pass
+	void SequentialElementPass(); // Sequential element callback pass
 	void SimulateGoL();
 	void RecalcFreeParticles(bool do_life_dec);
 	void CheckStacking();
