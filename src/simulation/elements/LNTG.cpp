@@ -28,7 +28,7 @@ void Element::Element_LNTG()
 
 	DefaultProperties.temp = 70.15f;
 	HeatConduct = 70;
-	Description = "Liquid Nitrogen. Very cold, disappears whenever it touches anything warmer.";
+	Description = "Liquid Nitrogen. Very cold, evaporates into nitrogen gas when warmed.";
 
 	Properties = TYPE_LIQUID;
 
@@ -38,6 +38,7 @@ void Element::Element_LNTG()
 	HighPressureTransition = NT;
 	LowTemperature = 63.0f;
 	LowTemperatureTransition = PT_NICE;
+	// Nitrogen boils at 77K, evaporating into nitrogen gas
 	HighTemperature = 77.0f;
-	HighTemperatureTransition = PT_NONE;
+	HighTemperatureTransition = PT_N2;
 }
