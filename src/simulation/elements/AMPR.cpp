@@ -97,7 +97,7 @@ void Element::Element_AMPR()
 	HeatConduct = 50;
 	Description = "Ammeter. 7-segment display. Draw 35x7 for best display. Shows XX.XXX mA. Conducts electricity.";
 
-	Properties = TYPE_SOLID | PROP_CONDUCTS | PROP_LIFE_DEC;
+	Properties = TYPE_SOLID | PROP_CONDUCTS;
 
 	LowPressure = IPL;
 	LowPressureTransition = NT;
@@ -162,8 +162,8 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				// Count sparks
-				if (rt == PT_SPRK && parts[rID].life == 3)
+				// Count sparks (any life value means active spark)
+				if (rt == PT_SPRK && parts[rID].life >= 1)
 				{
 					sparkCount++;
 				}
@@ -175,24 +175,24 @@ static int update(UPDATE_FUNC_ARGS)
 	parts[i].tmp4 += sparkCount;
 	parts[i].life++;
 
-	// Every 25 frames, update reading
-	if (parts[i].life >= 25)
+	// Every 10 frames, update reading (faster updates)
+	if (parts[i].life >= 10)
 	{
 		// Current in microamps = sparks * scale factor
-		// Each spark represents about 1mA = 1000 uA, scale for display
-		int current_ua = parts[i].tmp4 * 400;  // 400 uA per spark
+		int current_ua = parts[i].tmp4 * 1000;  // 1000 uA (1mA) per spark
 		if (current_ua > 99999) current_ua = 99999;
 
 		// Smooth the reading
-		parts[i].tmp = (parts[i].tmp * 3 + current_ua) / 4;
+		parts[i].tmp = (parts[i].tmp * 2 + current_ua) / 3;
 
 		// Reset for next window
 		parts[i].tmp4 = 0;
 		parts[i].life = 0;
 	}
 
-	// Ammeter conducts - pass current through
-	bool hasSpark = false;
+	// Ammeter conducts - actively pass sparks through
+	// Check for adjacent sparks
+	int sparkX = -1, sparkY = -1;
 	for (int rx = -1; rx <= 1; rx++)
 	{
 		for (int ry = -1; ry <= 1; ry++)
@@ -205,18 +205,19 @@ static int update(UPDATE_FUNC_ARGS)
 					continue;
 
 				auto r = pmap[ny][nx];
-				if (r && TYP(r) == PT_SPRK)
+				if (r && TYP(r) == PT_SPRK && parts[ID(r)].life == 3)
 				{
-					hasSpark = true;
+					sparkX = nx;
+					sparkY = ny;
 					break;
 				}
 			}
 		}
-		if (hasSpark) break;
+		if (sparkX >= 0) break;
 	}
 
-	// Pass spark to other side
-	if (hasSpark)
+	// Pass spark to conductors on the opposite side
+	if (sparkX >= 0)
 	{
 		for (int rx = -1; rx <= 1; rx++)
 		{
@@ -228,6 +229,9 @@ static int update(UPDATE_FUNC_ARGS)
 					int ny = y + ry;
 					if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
 						continue;
+					// Don't spark back to the source
+					if (nx == sparkX && ny == sparkY)
+						continue;
 
 					auto r = pmap[ny][nx];
 					if (r)
@@ -235,15 +239,14 @@ static int update(UPDATE_FUNC_ARGS)
 						auto rt = TYP(r);
 						auto rID = ID(r);
 
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN)
+						// Conduct to any conductor type
+						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN ||
+						     rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG)
 						    && parts[rID].life == 0)
 						{
-							if (sim->rng.chance(1, 2))
-							{
-								sim->part_change_type(rID, nx, ny, PT_SPRK);
-								parts[rID].ctype = rt;
-								parts[rID].life = 4;
-							}
+							sim->part_change_type(rID, nx, ny, PT_SPRK);
+							parts[rID].ctype = rt;
+							parts[rID].life = 4;
 						}
 					}
 				}
