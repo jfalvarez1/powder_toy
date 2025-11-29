@@ -192,9 +192,11 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// Check for NEW sparks entering from conductors (life == 4 means just created)
-	// Only count sparks that are on conductor wires, not on other AMPR
-	bool foundNewSpark = false;
+	// Check for sparks or recently-sparked conductors adjacent to this AMPR
+	// We need to detect both active sparks (PT_SPRK) and conductors in refractory period
+	bool foundSpark = false;
+	int sparkCountThisFrame = 0;
+
 	for (int rx = -1; rx <= 1; rx++)
 	{
 		for (int ry = -1; ry <= 1; ry++)
@@ -212,25 +214,43 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				// Count fresh sparks on wires (life == 4 or 3)
-				if (rt == PT_SPRK && parts[rID].life >= 3)
+				// Check for active spark (PT_SPRK with any life value)
+				if (rt == PT_SPRK && parts[rID].life >= 1)
 				{
-					// Make sure the underlying conductor is a wire type, not another AMPR
 					int ctype = parts[rID].ctype;
+					// Only count sparks on wire conductors
 					if (ctype == PT_METL || ctype == PT_INWR || ctype == PT_PSCN ||
 					    ctype == PT_NSCN || ctype == PT_IRON || ctype == PT_BMTL || ctype == PT_TUNG)
 					{
-						foundNewSpark = true;
-						// Count this spark for current measurement
-						parts[i].tmp4++;
+						foundSpark = true;
+						// Only count "fresh" sparks (life 4 or 3) for current measurement
+						if (parts[rID].life >= 3)
+						{
+							sparkCountThisFrame++;
+						}
 					}
+				}
+				// Also check for conductor in refractory period (just finished sparking)
+				// This catches sparks we might have missed due to update order
+				else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
+				          rt == PT_NSCN || rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG)
+				         && parts[rID].life > 0 && parts[rID].life <= 4)
+				{
+					// This conductor was recently sparked
+					foundSpark = true;
 				}
 			}
 		}
 	}
 
+	// Count sparks for current measurement
+	if (sparkCountThisFrame > 0)
+	{
+		parts[i].tmp4 += sparkCountThisFrame;
+	}
+
 	// If we found a spark, use flood-fill to propagate through entire cluster instantly
-	if (foundNewSpark)
+	if (foundSpark)
 	{
 		propagateSparkThroughCluster(sim, x, y);
 	}
@@ -239,7 +259,6 @@ static int update(UPDATE_FUNC_ARGS)
 	if (parts[i].life >= 10)
 	{
 		// Current in microamps = sparks * scale factor
-		// Scale down because multiple AMPR particles might count the same spark
 		int current_ua = parts[i].tmp4 * 500;  // 500 uA (0.5mA) per spark detection
 		if (current_ua > 99999) current_ua = 99999;
 
