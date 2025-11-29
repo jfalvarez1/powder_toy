@@ -162,6 +162,10 @@ void Element::Element_AMPR()
 
 static int update(UPDATE_FUNC_ARGS)
 {
+	// DEBUG: Always set a minimum value so we know update is running
+	if (parts[i].tmp < 100)
+		parts[i].tmp = 100;  // Show at least 00.100 mA to prove update runs
+
 	// Find cluster bounds (only do this periodically)
 	if (parts[i].life % 10 == 0)
 	{
