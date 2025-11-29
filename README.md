@@ -138,66 +138,240 @@ All electronic components use a **wire-type terminal identification** system:
 - **NSCN** = Power/Secondary terminal (negative/secondary input)
 - **METL/INWR** = Output terminal
 
+---
+
 ### Power & Signal Sources
 
-| Element | Description |
-| ------- | ----------- |
-| **VCCS** | Power supply. Voltage scales with cluster size (larger = more power). Use `tmp` to set base voltage. |
-| **SGNL** | Signal Generator. Generates waveforms. `tmp`=frequency (1-100), `tmp2`=waveform type (0-6: Square, Sine, Sawtooth, Pulse, Triangle, Ramp-down, Random). Spark PSCN to increase freq, NSCN to decrease, METL to cycle waveform. |
-| **GRND** | Ground. Absorbs electrical current. Essential reference point for circuits. |
+#### VCCS - Power Supply
+Voltage scales with cluster size (larger blocks = more power).
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Base voltage | 1-100 |
+| `tmp2` | Effective voltage (auto-calculated from cluster size) | Read-only |
+
+#### SGNL - Signal Generator
+Generates various waveforms at adjustable frequency.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Frequency (higher = faster) | 1-100 |
+| `tmp2` | Waveform type | 0-6 |
+| `tmp3` | Current output value | Read-only |
+
+Waveform types: 0=Square, 1=Sine, 2=Sawtooth, 3=Pulse, 4=Triangle, 5=Ramp-down, 6=Random
+
+**Controls:** Spark PSCN to increase freq, NSCN to decrease, METL to cycle waveform.
+
+#### GRND - Ground
+Absorbs electrical current. No configurable properties.
+
+---
 
 ### Measurement Instruments
 
-| Element | Description |
-| ------- | ----------- |
-| **VOLT** | Voltmeter with 7-segment display. Draw a 33x7 pixel rectangle for best display. Shows "XX.XXX V" format with 3 decimal places. Green LCD style. |
-| **AMPR** | Ammeter with 7-segment display. Draw a 38x7 pixel rectangle for best display. Shows "XX.XXX mA" format. Cyan LCD style. Conducts electricity. |
-| **PROB** | Oscilloscope Probe. Place next to signal source or connect via wire. Use Property Tool (P key) to set `tmp`=channel (0-3 for different colors). Signal propagates through connected probes instantly. |
-| **OSCI** | Oscilloscope Display. Draw a horizontal row for 1D time trace, or a grid for 2D waveform display. Place PROB nearby - auto-detects within 10 pixels. |
+#### VOLT - Voltmeter (7-segment display)
+Measures voltage. **Can use PROB probes for remote measurement!**
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Measured voltage in mV | Read-only |
+
+**Display size:** Draw 33x7 pixels for full "XX.XXX V" display.
+**Measures from:** VCCS, BTRY, SPRK, SGNL, CAPA, **PROB**
+
+#### AMPR - Ammeter (7-segment display)
+Measures current flow. Conducts electricity (wire it in series).
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Measured current in uA | Read-only |
+
+**Display size:** Draw 38x7 pixels for full "XX.XXX mA" display.
+
+#### PROB - Oscilloscope Probe
+Samples signals and propagates through connected probe wires.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Channel number (affects color) | 0-3 |
+| `tmp2` | Current signal value | Read-only |
+
+Channel colors: 0=Yellow, 1=Cyan, 2=Magenta, 3=Green
+
+#### OSCI - Oscilloscope Display
+Displays waveforms from nearby PROB.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Time position in display | Auto |
+| `tmp2` | Signal brightness | Auto |
+
+**Display modes:**
+- **1D trace:** Draw a horizontal row of OSCI. Signal scrolls left.
+- **2D waveform:** Draw a grid. Vertical axis = amplitude.
+
+---
 
 ### Passive Components
 
-| Element | Description |
-| ------- | ----------- |
-| **RESI** | Resistor. Limits current flow and delays spark propagation. `tmp` sets resistance (1-100). |
-| **CAPA** | Capacitor. Stores charge and releases it. Blocks DC, passes AC. `tmp2` sets capacitance. |
-| **INDC** | Inductor. Opposes changes in current, stores energy in magnetic field. `tmp` sets inductance. |
-| **POTM** | Potentiometer. Variable resistor. `tmp` sets position (0-100). Adjust with SPRK. |
+#### RESI - Resistor
+Limits current flow and delays spark propagation.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Resistance (higher = more delay) | 1-100 |
+
+#### CAPA - Capacitor
+Stores and releases charge. Blocks DC, passes AC.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Current charge level | 0-1000 |
+| `tmp2` | Capacitance (higher = more storage) | 1-100 |
+
+#### INDC - Inductor
+Opposes changes in current, stores energy in magnetic field.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Inductance value | 1-100 |
+
+#### POTM - Potentiometer
+Variable resistor. Spark it to adjust.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Wiper position (resistance) | 0-100 |
+
+**Controls:** Spark with PSCN to increase, NSCN to decrease.
+
+---
 
 ### Semiconductors
 
-| Element | Description |
-| ------- | ----------- |
-| **DIOD** | Diode. Current flows PSCN->DIOD->NSCN only. Blocks reverse flow. |
-| **ZEND** | Zener Diode. PSCN=anode, NSCN=cathode. Conducts forward, and reverse above threshold (`tmp`). |
-| **LEDS** | LED. Lights up when powered. `tmp` sets color (0-4: Red, Green, Blue, Yellow, White). Acts as diode. |
-| **TRNS** | NPN Transistor. PSCN=Base, NSCN=Collector, METL/INWR=Emitter. Base spark enables current flow. |
+#### DIOD - Diode
+Current flows one direction only: PSCN -> DIOD -> NSCN
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Forward voltage drop | Default: 0 |
+
+#### ZEND - Zener Diode
+Conducts forward, and reverse when above breakdown voltage.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Breakdown voltage threshold | 1-100 |
+
+**Terminals:** PSCN=anode, NSCN=cathode
+
+#### LEDS - LED
+Lights up when powered. Acts as a diode.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Color | 0-4 |
+
+Colors: 0=Red, 1=Green, 2=Blue, 3=Yellow, 4=White
+
+#### TRNS - NPN Transistor
+Current flows Collector->Emitter when Base is triggered.
+
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Gain/amplification | Default: 1 |
+
+**Terminals:** PSCN=Base, NSCN=Collector, METL/INWR=Emitter
+
+---
 
 ### Active Components
 
-| Element | Description |
-| ------- | ----------- |
-| **OPAM** | Op-Amp. Amplifies difference between inputs. PSCN=(+), NSCN=(-), outputs to METL/INWR. |
-| **RLAY** | Relay. PSCN=control coil, NSCN=signal in, METL/INWR=signal out. Passes signal when coil is energized. |
+#### OPAM - Operational Amplifier
+Amplifies the difference between + and - inputs.
 
-## Building Circuits - Quick Start
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Gain multiplier | 1-100 |
 
-1. **Simple LED circuit**: Draw VCCS -> METL wire -> LEDS -> METL wire -> GRND
-2. **Signal generator + Oscilloscope**: Draw SGNL -> PROB (long wire) -> place OSCI nearby
-3. **Transistor switch**: VCCS -> TRNS (connect PSCN to control signal, NSCN to VCCS, output from METL)
+**Terminals:** PSCN=(+) input, NSCN=(-) input, METL/INWR=output
 
-### Using the Property Tool
+#### RLAY - Relay
+Electrically controlled switch. Signal passes when coil is energized.
 
-Press **P** to open the Property Tool. Click on an element to modify its properties:
-- `tmp` - Primary parameter (frequency, resistance, channel, etc.)
-- `tmp2` - Secondary parameter (waveform type, capacitance, etc.)
+| Property | Description | Range |
+| -------- | ----------- | ----- |
+| `tmp` | Coil state (0=off, 1=on) | Read-only |
+
+**Terminals:** PSCN=control coil, NSCN=signal in, METL/INWR=signal out
+
+---
+
+## Example Setups
+
+### 1. Basic Voltage Measurement
+```
+[VCCS 5x5]----[METL wire]----[VOLT 33x7 display]
+```
+The voltmeter displays the VCCS output voltage.
+
+### 2. Voltage Measurement with Probes
+```
+                    [PROB]----[PROB wire]----[VOLT 33x7]
+                      |
+[VCCS]----[METL]----[circuit under test]----[GRND]
+```
+Place PROB at the measurement point, wire it to VOLT display.
+
+### 3. Current Measurement (Ammeter in Series)
+```
+[BTRY]----[METL]----[AMPR 38x7]----[METL]----[LEDS]----[GRND]
+                         ^
+                    (current flows through)
+```
+
+### 4. Signal Generator + Oscilloscope
+```
+[SGNL]----[PROB]=====[long PROB wire]=====[PROB]----[OSCI 50x10 grid]
+   ^
+  Set tmp=10 (frequency), tmp2=1 (sine wave)
+```
+
+### 5. Complete Test Bench
+```
+                              [VOLT 33x7]
+                                  |
+                               [PROB]
+                                  |
+[SGNL]---[PROB]---[circuit]---[PROB]---[AMPR 38x7]---[GRND]
+                                              |
+                                           [OSCI]
+```
+
+---
+
+## Using the Property Tool
+
+Press **P** to open the Property Tool, then click on an element to modify:
+
+| Property | Common Uses |
+| -------- | ----------- |
+| `tmp` | Frequency, resistance, channel, color, threshold |
+| `tmp2` | Waveform type, capacitance, secondary settings |
+| `tmp3` | Signal output values (usually read-only) |
+| `tmp4` | Channel info (usually read-only) |
 
 ### Console Commands
 
 Press **\`** (backtick) to open the console:
 ```
-!set tmp PROB 1    # Set all probes to channel 1
-!set tmp RESI 50   # Set all resistors to 50 ohms
+!set tmp PROB 1      # Set all probes to channel 1 (cyan)
+!set tmp RESI 50     # Set all resistors to 50 ohms
+!set tmp SGNL 20     # Set signal generator frequency to 20
+!set tmp2 SGNL 1     # Set signal generator to sine wave
+!set tmp LEDS 2      # Set all LEDs to blue
+!set tmp2 CAPA 50    # Set capacitor capacitance to 50
 ```
 
 ## Fun/Wacky Elements
