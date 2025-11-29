@@ -192,11 +192,10 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Simple test - just show if we find non-AMPR neighbor
+	// DEBUG: Show ALL neighbors including AMPR - don't skip anything
 	bool foundSpark = false;
-	bool foundNonAMPR = false;
-	int neighborType = 0;
-	int neighborLife = 0;
+	int neighborCount = 0;
+	int firstType = 999;  // Will show 999 if no neighbors at all
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
@@ -213,45 +212,26 @@ static int update(UPDATE_FUNC_ARGS)
 			if (!r) continue;
 
 			auto rt = TYP(r);
-			auto rID = ID(r);
+			neighborCount++;
 
-			// Skip AMPR
-			if (rt == PT_AMPR) continue;
-
-			// Found non-AMPR!
-			foundNonAMPR = true;
-			neighborType = rt;
-			neighborLife = parts[rID].life;
+			// Record first neighbor type found
+			if (firstType == 999) firstType = rt;
 
 			// Check for PT_SPRK
 			if (rt == PT_SPRK)
 			{
 				foundSpark = true;
-				// Show 88.888 when spark found (obvious indicator)
 				parts[i].tmp = 88888;
-			}
-			// Any particle with life > 0
-			else if (parts[rID].life > 0)
-			{
-				foundSpark = true;
-				// Show 77.777 when refractory found
-				parts[i].tmp = 77777;
 			}
 		}
 	}
 
-	// Display: type * 1000 + life
-	// e.g., type 7 with life 0 = 07.000, type 7 with life 3 = 07.003
+	// Display format: CC.TTT where CC = neighbor count, TTT = first type found
+	// e.g., 8 neighbors with first type 5 = 08.005
+	// If no neighbors: 00.999
 	if (!foundSpark)
 	{
-		if (foundNonAMPR)
-		{
-			parts[i].tmp = neighborType * 1000 + neighborLife;
-		}
-		else
-		{
-			parts[i].tmp = 11111;  // No non-AMPR neighbors = 11.111
-		}
+		parts[i].tmp = neighborCount * 1000 + firstType;
 	}
 
 	// Propagate spark
