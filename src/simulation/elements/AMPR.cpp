@@ -192,81 +192,55 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// Check for sparks or recently-sparked conductors adjacent to this AMPR
-	// We need to detect both active sparks (PT_SPRK) and conductors in refractory period
+	// Simple spark detection - check ALL 8 neighbors for any spark activity
 	bool foundSpark = false;
-	int sparkCountThisFrame = 0;
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
 		for (int ry = -1; ry <= 1; ry++)
 		{
-			if (rx || ry)
+			if (rx == 0 && ry == 0) continue;
+
+			int nx = x + rx;
+			int ny = y + ry;
+			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
+				continue;
+
+			auto r = pmap[ny][nx];
+			if (!r) continue;
+
+			auto rt = TYP(r);
+			auto rID = ID(r);
+
+			// Check for PT_SPRK (active spark)
+			if (rt == PT_SPRK)
 			{
-				int nx = x + rx;
-				int ny = y + ry;
-				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-					continue;
-
-				auto r = pmap[ny][nx];
-				if (!r)
-					continue;
-				auto rt = TYP(r);
-				auto rID = ID(r);
-
-				// Check for active spark (PT_SPRK with any life value)
-				if (rt == PT_SPRK && parts[rID].life >= 1)
-				{
-					int ctype = parts[rID].ctype;
-					// Only count sparks on wire conductors
-					if (ctype == PT_METL || ctype == PT_INWR || ctype == PT_PSCN ||
-					    ctype == PT_NSCN || ctype == PT_IRON || ctype == PT_BMTL || ctype == PT_TUNG)
-					{
-						foundSpark = true;
-						// Count ALL sparks for current measurement (not just fresh ones)
-						sparkCountThisFrame++;
-					}
-				}
-				// Also check for conductor in refractory period (just finished sparking)
-				// This catches sparks we might have missed due to update order
-				else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN ||
-				          rt == PT_NSCN || rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG)
-				         && parts[rID].life > 0 && parts[rID].life <= 4)
-				{
-					// This conductor was recently sparked - count it too!
-					foundSpark = true;
-					sparkCountThisFrame++;
-				}
+				foundSpark = true;
+				// Immediately boost tmp when spark detected (direct feedback)
+				parts[i].tmp += 1000;  // Add 1mA worth
+				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
+			}
+			// Check for conductor with life > 0 (refractory = just sparked)
+			else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN)
+			         && parts[rID].life > 0)
+			{
+				foundSpark = true;
+				parts[i].tmp += 500;  // Add 0.5mA worth
+				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
 			}
 		}
 	}
 
-	// Count sparks for current measurement
-	if (sparkCountThisFrame > 0)
+	// Decay the reading slowly when no spark detected
+	if (!foundSpark && parts[i].life % 5 == 0)
 	{
-		parts[i].tmp4 += sparkCountThisFrame;
+		parts[i].tmp = parts[i].tmp * 9 / 10;  // Decay by 10%
 	}
 
-	// If we found a spark, use flood-fill to propagate through entire cluster instantly
+	// Propagate spark through cluster if detected
 	if (foundSpark)
 	{
 		propagateSparkThroughCluster(sim, x, y);
-	}
-
-	// Every 10 frames, update reading
-	if (parts[i].life >= 10)
-	{
-		// Current in microamps = sparks * scale factor
-		// Divide by more to account for multiple detections per spark
-		int current_ua = parts[i].tmp4 * 100;  // 100 uA (0.1mA) per spark detection
-		if (current_ua > 99999) current_ua = 99999;
-
-		// Smooth the reading
-		parts[i].tmp = (parts[i].tmp * 2 + current_ua) / 3;
-
-		// Reset for next window
-		parts[i].tmp4 = 0;
-		parts[i].life = 0;
 	}
 
 	return 0;
