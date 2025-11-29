@@ -1,8 +1,56 @@
 #include "simulation/ElementCommon.h"
 #include <cmath>
+#include <queue>
 
 static int update(UPDATE_FUNC_ARGS);
 static int graphics(GRAPHICS_FUNC_ARGS);
+
+// Flood-fill to propagate spark through all connected AMPR and spark edge conductors
+static void propagateSparkThroughCluster(Simulation *sim, int startX, int startY)
+{
+	bool visited[YRES][XRES] = {false};
+	std::queue<std::pair<int,int>> toVisit;
+	toVisit.push({startX, startY});
+	visited[startY][startX] = true;
+
+	while (!toVisit.empty())
+	{
+		auto [cx, cy] = toVisit.front();
+		toVisit.pop();
+
+		// Check all 8 neighbors
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				if (dx == 0 && dy == 0) continue;
+				int nx = cx + dx;
+				int ny = cy + dy;
+				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+
+				auto r = sim->pmap[ny][nx];
+				if (!r) continue;
+				auto rt = TYP(r);
+				auto rID = ID(r);
+
+				// If it's another AMPR, add to queue for flood-fill
+				if (rt == PT_AMPR && !visited[ny][nx])
+				{
+					visited[ny][nx] = true;
+					toVisit.push({nx, ny});
+				}
+				// If it's a conductor, spark it!
+				else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN ||
+				          rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG) && sim->parts[rID].life == 0)
+				{
+					sim->part_change_type(rID, nx, ny, PT_SPRK);
+					sim->parts[rID].ctype = rt;
+					sim->parts[rID].life = 4;
+				}
+			}
+		}
+	}
+}
 
 // 7-segment digit patterns (bits: 0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G)
 static const unsigned char DIGITS[10] = {
@@ -114,8 +162,6 @@ void Element::Element_AMPR()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	int sparkCount = 0;
-
 	// Find cluster bounds (only do this periodically)
 	if (parts[i].life % 10 == 0)
 	{
@@ -144,7 +190,11 @@ static int update(UPDATE_FUNC_ARGS)
 		parts[i].tmp3 = minY;
 	}
 
-	// Count sparks passing through or nearby
+	parts[i].life++;
+
+	// Check for NEW sparks entering from conductors (life == 4 means just created)
+	// Only count sparks that are on conductor wires, not on other AMPR
+	bool foundNewSpark = false;
 	for (int rx = -1; rx <= 1; rx++)
 	{
 		for (int ry = -1; ry <= 1; ry++)
@@ -162,24 +212,35 @@ static int update(UPDATE_FUNC_ARGS)
 				auto rt = TYP(r);
 				auto rID = ID(r);
 
-				// Count sparks (any life value means active spark)
-				if (rt == PT_SPRK && parts[rID].life >= 1)
+				// Count fresh sparks on wires (life == 4 or 3)
+				if (rt == PT_SPRK && parts[rID].life >= 3)
 				{
-					sparkCount++;
+					// Make sure the underlying conductor is a wire type, not another AMPR
+					int ctype = parts[rID].ctype;
+					if (ctype == PT_METL || ctype == PT_INWR || ctype == PT_PSCN ||
+					    ctype == PT_NSCN || ctype == PT_IRON || ctype == PT_BMTL || ctype == PT_TUNG)
+					{
+						foundNewSpark = true;
+						// Count this spark for current measurement
+						parts[i].tmp4++;
+					}
 				}
 			}
 		}
 	}
 
-	// Add to running count
-	parts[i].tmp4 += sparkCount;
-	parts[i].life++;
+	// If we found a spark, use flood-fill to propagate through entire cluster instantly
+	if (foundNewSpark)
+	{
+		propagateSparkThroughCluster(sim, x, y);
+	}
 
-	// Every 10 frames, update reading (faster updates)
+	// Every 10 frames, update reading
 	if (parts[i].life >= 10)
 	{
 		// Current in microamps = sparks * scale factor
-		int current_ua = parts[i].tmp4 * 1000;  // 1000 uA (1mA) per spark
+		// Scale down because multiple AMPR particles might count the same spark
+		int current_ua = parts[i].tmp4 * 500;  // 500 uA (0.5mA) per spark detection
 		if (current_ua > 99999) current_ua = 99999;
 
 		// Smooth the reading
@@ -188,109 +249,6 @@ static int update(UPDATE_FUNC_ARGS)
 		// Reset for next window
 		parts[i].tmp4 = 0;
 		parts[i].life = 0;
-	}
-
-	// Ammeter conducts - actively pass sparks through the cluster
-	// Check if THIS particle or ANY adjacent AMPR detected a spark
-	bool sparkDetected = false;
-
-	// First, check for sparks adjacent to this particle
-	for (int rx = -1; rx <= 1; rx++)
-	{
-		for (int ry = -1; ry <= 1; ry++)
-		{
-			if (rx || ry)
-			{
-				int nx = x + rx;
-				int ny = y + ry;
-				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-					continue;
-
-				auto r = pmap[ny][nx];
-				if (r && TYP(r) == PT_SPRK && parts[ID(r)].life == 3)
-				{
-					sparkDetected = true;
-					break;
-				}
-			}
-		}
-		if (sparkDetected) break;
-	}
-
-	// Also check if nearby AMPR particles have the spark flag set (for propagation through cluster)
-	if (!sparkDetected)
-	{
-		for (int rx = -1; rx <= 1; rx++)
-		{
-			for (int ry = -1; ry <= 1; ry++)
-			{
-				if (rx || ry)
-				{
-					int nx = x + rx;
-					int ny = y + ry;
-					if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-						continue;
-
-					auto r = pmap[ny][nx];
-					if (r && TYP(r) == PT_AMPR)
-					{
-						// Check if this AMPR has recent spark activity (use flags field)
-						if (parts[ID(r)].flags & 0x1)
-						{
-							sparkDetected = true;
-							break;
-						}
-					}
-				}
-			}
-			if (sparkDetected) break;
-		}
-	}
-
-	// Set/clear spark flag for propagation
-	if (sparkDetected)
-	{
-		parts[i].flags |= 0x1;  // Set spark flag
-
-		// Pass spark to any adjacent conductors
-		for (int rx = -1; rx <= 1; rx++)
-		{
-			for (int ry = -1; ry <= 1; ry++)
-			{
-				if (rx || ry)
-				{
-					int nx = x + rx;
-					int ny = y + ry;
-					if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-						continue;
-
-					auto r = pmap[ny][nx];
-					if (r)
-					{
-						auto rt = TYP(r);
-						auto rID = ID(r);
-
-						// Conduct to any conductor type
-						if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN ||
-						     rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG)
-						    && parts[rID].life == 0)
-						{
-							sim->part_change_type(rID, nx, ny, PT_SPRK);
-							parts[rID].ctype = rt;
-							parts[rID].life = 4;
-						}
-					}
-				}
-			}
-		}
-	}
-	else
-	{
-		// Clear spark flag after a delay
-		if (parts[i].flags & 0x1)
-		{
-			parts[i].flags &= ~0x1;
-		}
 	}
 
 	return 0;
