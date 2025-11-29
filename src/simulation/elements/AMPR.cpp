@@ -153,8 +153,8 @@ void Element::Element_AMPR()
 	HighPressureTransition = NT;
 	LowTemperature = ITL;
 	LowTemperatureTransition = NT;
-	HighTemperature = 600.0f;
-	HighTemperatureTransition = PT_FIRE;
+	HighTemperature = ITH;
+	HighTemperatureTransition = NT;
 
 	Update = &update;
 	Graphics = &graphics;
