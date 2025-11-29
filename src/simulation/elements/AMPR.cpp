@@ -190,9 +190,11 @@ static int update(UPDATE_FUNC_ARGS)
 		parts[i].life = 0;
 	}
 
-	// Ammeter conducts - actively pass sparks through
-	// Check for adjacent sparks
-	int sparkX = -1, sparkY = -1;
+	// Ammeter conducts - actively pass sparks through the cluster
+	// Check if THIS particle or ANY adjacent AMPR detected a spark
+	bool sparkDetected = false;
+
+	// First, check for sparks adjacent to this particle
 	for (int rx = -1; rx <= 1; rx++)
 	{
 		for (int ry = -1; ry <= 1; ry++)
@@ -207,17 +209,16 @@ static int update(UPDATE_FUNC_ARGS)
 				auto r = pmap[ny][nx];
 				if (r && TYP(r) == PT_SPRK && parts[ID(r)].life == 3)
 				{
-					sparkX = nx;
-					sparkY = ny;
+					sparkDetected = true;
 					break;
 				}
 			}
 		}
-		if (sparkX >= 0) break;
+		if (sparkDetected) break;
 	}
 
-	// Pass spark to conductors on the opposite side
-	if (sparkX >= 0)
+	// Also check if nearby AMPR particles have the spark flag set (for propagation through cluster)
+	if (!sparkDetected)
 	{
 		for (int rx = -1; rx <= 1; rx++)
 		{
@@ -229,8 +230,38 @@ static int update(UPDATE_FUNC_ARGS)
 					int ny = y + ry;
 					if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
 						continue;
-					// Don't spark back to the source
-					if (nx == sparkX && ny == sparkY)
+
+					auto r = pmap[ny][nx];
+					if (r && TYP(r) == PT_AMPR)
+					{
+						// Check if this AMPR has recent spark activity (use flags field)
+						if (parts[ID(r)].flags & 0x1)
+						{
+							sparkDetected = true;
+							break;
+						}
+					}
+				}
+			}
+			if (sparkDetected) break;
+		}
+	}
+
+	// Set/clear spark flag for propagation
+	if (sparkDetected)
+	{
+		parts[i].flags |= 0x1;  // Set spark flag
+
+		// Pass spark to any adjacent conductors
+		for (int rx = -1; rx <= 1; rx++)
+		{
+			for (int ry = -1; ry <= 1; ry++)
+			{
+				if (rx || ry)
+				{
+					int nx = x + rx;
+					int ny = y + ry;
+					if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
 						continue;
 
 					auto r = pmap[ny][nx];
@@ -251,6 +282,14 @@ static int update(UPDATE_FUNC_ARGS)
 					}
 				}
 			}
+		}
+	}
+	else
+	{
+		// Clear spark flag after a delay
+		if (parts[i].flags & 0x1)
+		{
+			parts[i].flags &= ~0x1;
 		}
 	}
 
