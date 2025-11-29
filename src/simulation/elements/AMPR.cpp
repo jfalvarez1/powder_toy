@@ -192,13 +192,18 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Count ALL neighbors and empty slots
+	// DEBUG: Show PT_SPRK type ID directly so we know what to look for
+	// Display format: SS.AAA where SS = PT_SPRK type, AAA = PT_AMPR type (mod 1000)
+	// This tells us what type IDs to expect
+
+	// First, just show the type IDs so we know what they are
+	// PT_SPRK should be around 15, PT_AMPR around 279
+	int sprkType = PT_SPRK;
+	int amprType = PT_AMPR;
+
+	// Check neighbors for any spark
 	bool foundSpark = false;
-	int totalInPmap = 0;  // Total neighbors found in pmap
-	int emptySlots = 0;   // Neighbor positions with nothing in pmap
-	int amprCount = 0;
-	int otherCount = 0;
-	int otherType = 0;
+	int sparkNeighborType = 0;
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
@@ -209,46 +214,40 @@ static int update(UPDATE_FUNC_ARGS)
 			int nx = x + rx;
 			int ny = y + ry;
 			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-			{
-				emptySlots++;
 				continue;
-			}
 
 			auto r = pmap[ny][nx];
-			if (!r)
-			{
-				emptySlots++;
-				continue;
-			}
+			if (!r) continue;
 
-			totalInPmap++;
 			auto rt = TYP(r);
 
-			if (rt == PT_AMPR)
-			{
-				amprCount++;
-			}
-			else
-			{
-				otherCount++;
-				otherType = rt;
-			}
-
-			if (rt == PT_SPRK)
+			// Check if this neighbor's type equals PT_SPRK
+			if (rt == sprkType)
 			{
 				foundSpark = true;
-				parts[i].tmp = 88888;
+				parts[i].tmp = 88888;  // Found spark!
+			}
+
+			// Also record if we find any non-AMPR type
+			if (rt != amprType && sparkNeighborType == 0)
+			{
+				sparkNeighborType = rt;
 			}
 		}
 	}
 
-	// Display: TE.AOO where T=total, E=empty, A=ampr, OO=other count*10+type%10
-	// Interior: 80.800 (8 total, 0 empty, 8 AMPR, 0 other)
-	// Edge of cluster: 53.530 (5 total, 3 empty, 5 AMPR, 3 other type 0=none)
-	// Edge with METL: 80.537 (8 total, 0 empty, 5 AMPR, 3 other type 7)
+	// Display: show PT_SPRK and PT_AMPR type IDs
+	// Format: SS.AAA where SS = PT_SPRK % 100, AAA = PT_AMPR % 1000
 	if (!foundSpark)
 	{
-		parts[i].tmp = totalInPmap * 10000 + emptySlots * 1000 + amprCount * 100 + otherCount * 10 + (otherType % 10);
+		// Show the type IDs so we know what to look for
+		// Also show sparkNeighborType if found (in ones digit area)
+		parts[i].tmp = (sprkType % 100) * 1000 + (amprType % 1000);
+		// If we found a non-AMPR neighbor, add its type to display
+		if (sparkNeighborType > 0)
+		{
+			parts[i].tmp = 50000 + sparkNeighborType;  // 50.XXX shows non-AMPR type found
+		}
 	}
 
 	// Propagate spark
