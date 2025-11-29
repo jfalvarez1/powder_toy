@@ -140,9 +140,12 @@ static int update(UPDATE_FUNC_ARGS)
 			}
 
 			// Sample from VCCS (power supply voltage)
+			// VCCS tmp2 is effective voltage (10-500), scale to 0-100 range
 			if (rt == PT_VCCS)
 			{
-				directSignal = std::max(directSignal, parts[rID].tmp2 / 5);
+				int vccsVoltage = parts[rID].tmp2;
+				// Scale: 10V = signal 20, 50V = signal 100
+				directSignal = std::max(directSignal, std::min(vccsVoltage * 2, 100));
 				hasDirectSource = true;
 			}
 
@@ -192,15 +195,42 @@ static int update(UPDATE_FUNC_ARGS)
 	}
 	else
 	{
-		// No direct source - decay signal over time so it goes low when source disconnects
-		int currentSignal = parts[i].tmp2;
-		if (currentSignal > 0)
+		// No direct source - check neighboring probes for signal
+		int neighborSignal = 0;
+		for (int rx = -1; rx <= 1; rx++)
 		{
-			// Fast decay - signal drops quickly when source is gone
-			currentSignal -= 10;
-			if (currentSignal < 0) currentSignal = 0;
-			parts[i].tmp2 = currentSignal;
-			parts[i].tmp3 = currentSignal;
+			for (int ry = -1; ry <= 1; ry++)
+			{
+				if (rx == 0 && ry == 0) continue;
+				int nx = x + rx;
+				int ny = y + ry;
+				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+
+				auto r = pmap[ny][nx];
+				if (r && TYP(r) == PT_PROB)
+				{
+					neighborSignal = std::max(neighborSignal, (int)parts[ID(r)].tmp2);
+				}
+			}
+		}
+
+		if (neighborSignal > 0)
+		{
+			// Take signal from neighbors (propagation)
+			parts[i].tmp2 = neighborSignal;
+			parts[i].tmp3 = neighborSignal;
+		}
+		else
+		{
+			// No neighbors with signal - decay
+			int currentSignal = parts[i].tmp2;
+			if (currentSignal > 0)
+			{
+				currentSignal -= 5;
+				if (currentSignal < 0) currentSignal = 0;
+				parts[i].tmp2 = currentSignal;
+				parts[i].tmp3 = currentSignal;
+			}
 		}
 	}
 
