@@ -125,3 +125,94 @@ Command Line
 | `console`             | Redirects output to a new console on Windows     |                                             |
 | `cafile:CAFILE`       | Set certificate bundle path                      | `cafile:/etc/ssl/certs/ca-certificates.crt` |
 | `capath:CAPATH`       | Set certificate directory path                   | `capath:/etc/ssl/certs`                     |
+
+Custom Elements
+===========================================================================
+
+This fork includes many new elements for building circuits and having fun!
+
+## Electronic Components
+
+All electronic components use a **wire-type terminal identification** system:
+- **PSCN** = Control/Input terminal (positive/signal input)
+- **NSCN** = Power/Secondary terminal (negative/secondary input)
+- **METL/INWR** = Output terminal
+
+### Power & Signal Sources
+
+| Element | Description |
+| ------- | ----------- |
+| **VCCS** | Power supply. Voltage scales with cluster size (larger = more power). Use `tmp` to set base voltage. |
+| **SGNL** | Signal Generator. Generates waveforms. `tmp`=frequency (1-100), `tmp2`=waveform type (0-6: Square, Sine, Sawtooth, Pulse, Triangle, Ramp-down, Random). Spark PSCN to increase freq, NSCN to decrease, METL to cycle waveform. |
+| **GRND** | Ground. Absorbs electrical current. Essential reference point for circuits. |
+
+### Measurement Instruments
+
+| Element | Description |
+| ------- | ----------- |
+| **VOLT** | Voltmeter. Measures voltage from nearby VCCS or spark intensity. Color: Green=low, Yellow=medium, Red=high. |
+| **AMPR** | Ammeter. Measures current flow (sparks/sec). Conducts electricity. Color: Blue=low, Cyan=medium, White=high. |
+| **PROB** | Oscilloscope Probe. Place next to signal source or connect via wire. Use Property Tool (P key) to set `tmp`=channel (0-3 for different colors). Signal propagates through connected probes instantly. |
+| **OSCI** | Oscilloscope Display. Draw a horizontal row for 1D time trace, or a grid for 2D waveform display. Place PROB nearby - auto-detects within 10 pixels. |
+
+### Passive Components
+
+| Element | Description |
+| ------- | ----------- |
+| **RESI** | Resistor. Limits current flow and delays spark propagation. `tmp` sets resistance (1-100). |
+| **CAPA** | Capacitor. Stores charge and releases it. Blocks DC, passes AC. `tmp2` sets capacitance. |
+| **INDC** | Inductor. Opposes changes in current, stores energy in magnetic field. `tmp` sets inductance. |
+| **POTM** | Potentiometer. Variable resistor. `tmp` sets position (0-100). Adjust with SPRK. |
+
+### Semiconductors
+
+| Element | Description |
+| ------- | ----------- |
+| **DIOD** | Diode. Current flows PSCN->DIOD->NSCN only. Blocks reverse flow. |
+| **ZEND** | Zener Diode. PSCN=anode, NSCN=cathode. Conducts forward, and reverse above threshold (`tmp`). |
+| **LEDS** | LED. Lights up when powered. `tmp` sets color (0-4: Red, Green, Blue, Yellow, White). Acts as diode. |
+| **TRNS** | NPN Transistor. PSCN=Base, NSCN=Collector, METL/INWR=Emitter. Base spark enables current flow. |
+
+### Active Components
+
+| Element | Description |
+| ------- | ----------- |
+| **OPAM** | Op-Amp. Amplifies difference between inputs. PSCN=(+), NSCN=(-), outputs to METL/INWR. |
+| **RLAY** | Relay. PSCN=control coil, NSCN=signal in, METL/INWR=signal out. Passes signal when coil is energized. |
+
+## Building Circuits - Quick Start
+
+1. **Simple LED circuit**: Draw VCCS -> METL wire -> LEDS -> METL wire -> GRND
+2. **Signal generator + Oscilloscope**: Draw SGNL -> PROB (long wire) -> place OSCI nearby
+3. **Transistor switch**: VCCS -> TRNS (connect PSCN to control signal, NSCN to VCCS, output from METL)
+
+### Using the Property Tool
+
+Press **P** to open the Property Tool. Click on an element to modify its properties:
+- `tmp` - Primary parameter (frequency, resistance, channel, etc.)
+- `tmp2` - Secondary parameter (waveform type, capacitance, etc.)
+
+### Console Commands
+
+Press **\`** (backtick) to open the console:
+```
+!set tmp PROB 1    # Set all probes to channel 1
+!set tmp RESI 50   # Set all resistors to 50 ohms
+```
+
+## Fun/Wacky Elements
+
+| Element | Description |
+| ------- | ----------- |
+| **BLOB** | Living Blob. A creature that eats organic matter and grows. Gets hungry! |
+| **GOST** | Ghost. Spooky! Passes through walls, haunts stickmen, fears light. |
+| **MIRR** | Mirror. Reflects particles back in the opposite direction! |
+| **RBOW** | Rainbow. Colorful particles that leave beautiful trails everywhere! |
+| **TIMZ** | Time Zone. Slows down all particles in its vicinity dramatically! |
+| **LUCK** | Lucky Dust. Brings good fortune - random positive effects on nearby particles! |
+| **ECHO** | Echo Matter. Copies any particle it touches and creates duplicates! |
+| **PRSM** | Prism. Refracts light into rainbow colors! Creates spectacular light shows. |
+| **SWRM** | Swarm. Insect swarm that seeks food and attacks! Controlled chaos. |
+| **QAKE** | Quake. Causes earthquakes! Shakes nearby particles violently. |
+
+And many more! Explore the Electronics (ELEC) and Special menus to find all new elements.
