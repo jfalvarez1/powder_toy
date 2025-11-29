@@ -59,9 +59,10 @@ static int update(UPDATE_FUNC_ARGS)
 	if (channel > 3) channel = 3;
 	parts[i].tmp = channel;
 
-	int sampleValue = 0;
+	int directSignal = 0;
+	bool hasDirectSource = false;
 
-	// Scan nearby area for signal sources (larger range for easier use)
+	// Scan nearby area for direct signal sources
 	for (int rx = -5; rx <= 5; rx++)
 	{
 		for (int ry = -5; ry <= 5; ry++)
@@ -83,19 +84,22 @@ static int update(UPDATE_FUNC_ARGS)
 			// Sample from SGNL (signal generator)
 			if (rt == PT_SGNL)
 			{
-				sampleValue = std::max(sampleValue, parts[rID].tmp3);
+				directSignal = std::max(directSignal, parts[rID].tmp3);
+				hasDirectSource = true;
 			}
 
 			// Sample from VCCS (power supply voltage)
 			if (rt == PT_VCCS)
 			{
-				sampleValue = std::max(sampleValue, parts[rID].tmp2 / 5);
+				directSignal = std::max(directSignal, parts[rID].tmp2 / 5);
+				hasDirectSource = true;
 			}
 
 			// Sample sparks on wires (so wire connections work)
 			if (rt == PT_SPRK)
 			{
-				sampleValue = std::max(sampleValue, 80);  // Spark = high signal
+				directSignal = std::max(directSignal, 80);
+				hasDirectSource = true;
 			}
 
 			// Sample from capacitor charge
@@ -104,47 +108,61 @@ static int update(UPDATE_FUNC_ARGS)
 				int charge = parts[rID].tmp;
 				int cap = parts[rID].tmp2;
 				if (cap > 0)
-					sampleValue = std::max(sampleValue, charge * 100 / (cap * 10));
+				{
+					directSignal = std::max(directSignal, charge * 100 / (cap * 10));
+					hasDirectSource = true;
+				}
 			}
 
 			// Sample from voltmeter reading
 			if (rt == PT_VOLT)
 			{
-				sampleValue = std::max(sampleValue, parts[rID].tmp / 3);
+				directSignal = std::max(directSignal, parts[rID].tmp / 3);
+				hasDirectSource = true;
 			}
 
 			// Sample from ammeter reading
 			if (rt == PT_AMPR)
 			{
-				sampleValue = std::max(sampleValue, parts[rID].tmp / 3);
+				directSignal = std::max(directSignal, parts[rID].tmp / 3);
+				hasDirectSource = true;
 			}
 		}
 	}
 
-	// Propagate signal from adjacent PROB particles (allows long probe chains)
-	for (int rx = -1; rx <= 1; rx++)
+	int sampleValue = 0;
+
+	if (hasDirectSource)
 	{
-		for (int ry = -1; ry <= 1; ry++)
+		// Use direct signal - don't read from neighbors to avoid feedback
+		sampleValue = directSignal;
+	}
+	else
+	{
+		// No direct source - propagate from neighboring probes
+		for (int rx = -1; rx <= 1; rx++)
 		{
-			if (rx == 0 && ry == 0)
-				continue;
-
-			int nx = x + rx;
-			int ny = y + ry;
-			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-				continue;
-
-			auto r = pmap[ny][nx];
-			if (!r)
-				continue;
-			auto rt = TYP(r);
-			auto rID = ID(r);
-
-			// Propagate from neighboring probes (no decay - signal travels full length)
-			if (rt == PT_PROB)
+			for (int ry = -1; ry <= 1; ry++)
 			{
-				int neighborSignal = parts[rID].tmp2;
-				sampleValue = std::max(sampleValue, neighborSignal);
+				if (rx == 0 && ry == 0)
+					continue;
+
+				int nx = x + rx;
+				int ny = y + ry;
+				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
+					continue;
+
+				auto r = pmap[ny][nx];
+				if (!r)
+					continue;
+				auto rt = TYP(r);
+				auto rID = ID(r);
+
+				if (rt == PT_PROB)
+				{
+					int neighborSignal = parts[rID].tmp2;
+					sampleValue = std::max(sampleValue, neighborSignal);
+				}
 			}
 		}
 	}
