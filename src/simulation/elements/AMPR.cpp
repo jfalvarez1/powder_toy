@@ -223,11 +223,8 @@ static int update(UPDATE_FUNC_ARGS)
 					    ctype == PT_NSCN || ctype == PT_IRON || ctype == PT_BMTL || ctype == PT_TUNG)
 					{
 						foundSpark = true;
-						// Only count "fresh" sparks (life 4 or 3) for current measurement
-						if (parts[rID].life >= 3)
-						{
-							sparkCountThisFrame++;
-						}
+						// Count ALL sparks for current measurement (not just fresh ones)
+						sparkCountThisFrame++;
 					}
 				}
 				// Also check for conductor in refractory period (just finished sparking)
@@ -236,8 +233,9 @@ static int update(UPDATE_FUNC_ARGS)
 				          rt == PT_NSCN || rt == PT_IRON || rt == PT_BMTL || rt == PT_TUNG)
 				         && parts[rID].life > 0 && parts[rID].life <= 4)
 				{
-					// This conductor was recently sparked
+					// This conductor was recently sparked - count it too!
 					foundSpark = true;
+					sparkCountThisFrame++;
 				}
 			}
 		}
@@ -259,7 +257,8 @@ static int update(UPDATE_FUNC_ARGS)
 	if (parts[i].life >= 10)
 	{
 		// Current in microamps = sparks * scale factor
-		int current_ua = parts[i].tmp4 * 500;  // 500 uA (0.5mA) per spark detection
+		// Divide by more to account for multiple detections per spark
+		int current_ua = parts[i].tmp4 * 100;  // 100 uA (0.1mA) per spark detection
 		if (current_ua > 99999) current_ua = 99999;
 
 		// Smooth the reading
