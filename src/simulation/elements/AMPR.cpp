@@ -97,7 +97,7 @@ void Element::Element_AMPR()
 	HeatConduct = 50;
 	Description = "Ammeter. 7-segment display. Draw 35x7 for best display. Shows XX.XXX mA. Conducts electricity.";
 
-	Properties = TYPE_SOLID | PROP_CONDUCTS;
+	Properties = TYPE_SOLID;  // Don't use PROP_CONDUCTS - we handle spark passing manually
 
 	LowPressure = IPL;
 	LowPressureTransition = NT;
