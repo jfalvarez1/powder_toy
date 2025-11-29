@@ -192,10 +192,11 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Display the actual particle type number found
-	// This will show us exactly what type the neighbor is
+	// DEBUG: Simple test - just show if we find non-AMPR neighbor
 	bool foundSpark = false;
-	int foundType = 0;
+	bool foundNonAMPR = false;
+	int neighborType = 0;
+	int neighborLife = 0;
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
@@ -214,39 +215,43 @@ static int update(UPDATE_FUNC_ARGS)
 			auto rt = TYP(r);
 			auto rID = ID(r);
 
-			// Skip our own type (AMPR)
+			// Skip AMPR
 			if (rt == PT_AMPR) continue;
 
-			// Record the type number (multiply by 100 to show as XX.XXX)
-			// PT_METL should be around 4, PT_SPRK around 15
-			if (foundType == 0)
-			{
-				foundType = rt * 100;  // Show type as 00.X00
-			}
+			// Found non-AMPR!
+			foundNonAMPR = true;
+			neighborType = rt;
+			neighborLife = parts[rID].life;
 
-			// Check for PT_SPRK (active spark)
+			// Check for PT_SPRK
 			if (rt == PT_SPRK)
 			{
 				foundSpark = true;
-				parts[i].tmp = 50000 + rt * 100;  // 50.XXX shows spark + type
+				// Show 88.888 when spark found (obvious indicator)
+				parts[i].tmp = 88888;
 			}
-			// Check for conductor with life > 0 (refractory)
+			// Any particle with life > 0
 			else if (parts[rID].life > 0)
 			{
 				foundSpark = true;
-				parts[i].tmp = 30000 + rt * 100;  // 30.XXX shows refractory + type
+				// Show 77.777 when refractory found
+				parts[i].tmp = 77777;
 			}
 		}
 	}
 
-	// Show found type as base display if no spark
-	if (!foundSpark && foundType > 0)
+	// Display: type * 1000 + life
+	// e.g., type 7 with life 0 = 07.000, type 7 with life 3 = 07.003
+	if (!foundSpark)
 	{
-		parts[i].tmp = foundType;  // Shows 00.X00 where X is type/10
-	}
-	else if (!foundSpark)
-	{
-		parts[i].tmp = 1;  // No non-AMPR neighbors found
+		if (foundNonAMPR)
+		{
+			parts[i].tmp = neighborType * 1000 + neighborLife;
+		}
+		else
+		{
+			parts[i].tmp = 11111;  // No non-AMPR neighbors = 11.111
+		}
 	}
 
 	// Propagate spark
