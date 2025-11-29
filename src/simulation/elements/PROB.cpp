@@ -1,8 +1,59 @@
 #include "simulation/ElementCommon.h"
 #include <cmath>
+#include <queue>
+#include <vector>
 
 static int update(UPDATE_FUNC_ARGS);
 static int graphics(GRAPHICS_FUNC_ARGS);
+
+// Flood-fill to propagate signal through connected probes
+static void propagateSignal(Simulation *sim, int startX, int startY, int signal, int channel)
+{
+	bool visited[YRES][XRES] = {false};
+	std::queue<std::pair<int,int>> toVisit;
+	toVisit.push({startX, startY});
+	visited[startY][startX] = true;
+
+	while (!toVisit.empty())
+	{
+		auto [cx, cy] = toVisit.front();
+		toVisit.pop();
+
+		// Set signal on this probe
+		auto r = sim->pmap[cy][cx];
+		if (r && TYP(r) == PT_PROB)
+		{
+			int idx = ID(r);
+			// Only update if our signal is higher (avoids overwriting with stale data)
+			if (signal > sim->parts[idx].tmp2)
+			{
+				sim->parts[idx].tmp2 = signal;
+				sim->parts[idx].tmp3 = signal;
+				sim->parts[idx].tmp4 = channel;
+			}
+		}
+
+		// Check all 8 neighbors
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				if (dx == 0 && dy == 0) continue;
+				int nx = cx + dx;
+				int ny = cy + dy;
+				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+				if (visited[ny][nx]) continue;
+
+				auto nr = sim->pmap[ny][nx];
+				if (nr && TYP(nr) == PT_PROB)
+				{
+					visited[ny][nx] = true;
+					toVisit.push({nx, ny});
+				}
+			}
+		}
+	}
+}
 
 void Element::Element_PROB()
 {
@@ -130,54 +181,33 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	int sampleValue = 0;
-
 	if (hasDirectSource)
 	{
-		// Use direct signal - don't read from neighbors to avoid feedback
-		sampleValue = directSignal;
+		// Clamp signal
+		if (directSignal > 100) directSignal = 100;
+		if (directSignal < 0) directSignal = 0;
+
+		// Propagate signal instantly to all connected probes via flood-fill
+		propagateSignal(sim, x, y, directSignal, channel);
 	}
 	else
 	{
-		// No direct source - propagate from neighboring probes
-		for (int rx = -1; rx <= 1; rx++)
+		// No direct source - decay signal over time so it goes low when source disconnects
+		int currentSignal = parts[i].tmp2;
+		if (currentSignal > 0)
 		{
-			for (int ry = -1; ry <= 1; ry++)
-			{
-				if (rx == 0 && ry == 0)
-					continue;
-
-				int nx = x + rx;
-				int ny = y + ry;
-				if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
-					continue;
-
-				auto r = pmap[ny][nx];
-				if (!r)
-					continue;
-				auto rt = TYP(r);
-				auto rID = ID(r);
-
-				if (rt == PT_PROB)
-				{
-					int neighborSignal = parts[rID].tmp2;
-					sampleValue = std::max(sampleValue, neighborSignal);
-				}
-			}
+			// Fast decay - signal drops quickly when source is gone
+			currentSignal -= 10;
+			if (currentSignal < 0) currentSignal = 0;
+			parts[i].tmp2 = currentSignal;
+			parts[i].tmp3 = currentSignal;
 		}
 	}
 
-	// Clamp sample value
-	if (sampleValue > 100) sampleValue = 100;
-	if (sampleValue < 0) sampleValue = 0;
-
-	parts[i].tmp2 = sampleValue;
-
-	// Store for oscilloscope: tmp3 = sample, tmp4 = channel
-	parts[i].tmp3 = sampleValue;
 	parts[i].tmp4 = channel;
 
 	// Visual history
+	int sampleValue = parts[i].tmp2;
 	parts[i].life = ((parts[i].life << 4) | (sampleValue / 7)) & 0xFFFFFF;
 
 	return 0;
