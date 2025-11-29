@@ -61,7 +61,7 @@ static int update(UPDATE_FUNC_ARGS)
 
 	int sampleValue = 0;
 
-	// Scan nearby area for signals (larger range for easier use)
+	// Scan nearby area for signal sources (larger range for easier use)
 	for (int rx = -5; rx <= 5; rx++)
 	{
 		for (int ry = -5; ry <= 5; ry++)
@@ -117,6 +117,34 @@ static int update(UPDATE_FUNC_ARGS)
 			if (rt == PT_AMPR)
 			{
 				sampleValue = std::max(sampleValue, parts[rID].tmp / 3);
+			}
+		}
+	}
+
+	// Propagate signal from adjacent PROB particles (allows long probe chains)
+	for (int rx = -1; rx <= 1; rx++)
+	{
+		for (int ry = -1; ry <= 1; ry++)
+		{
+			if (rx == 0 && ry == 0)
+				continue;
+
+			int nx = x + rx;
+			int ny = y + ry;
+			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
+				continue;
+
+			auto r = pmap[ny][nx];
+			if (!r)
+				continue;
+			auto rt = TYP(r);
+			auto rID = ID(r);
+
+			// Propagate from neighboring probes (no decay - signal travels full length)
+			if (rt == PT_PROB)
+			{
+				int neighborSignal = parts[rID].tmp2;
+				sampleValue = std::max(sampleValue, neighborSignal);
 			}
 		}
 	}
