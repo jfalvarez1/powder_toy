@@ -192,10 +192,10 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Check what we can see in neighbors
-	// Display codes: 100=base, 200=found any neighbor, 300=found METL, 350=refractory, 400=SPRK
-	int debugCode = 100;
+	// DEBUG: Display the actual particle type number found
+	// This will show us exactly what type the neighbor is
 	bool foundSpark = false;
+	int foundType = 0;
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
@@ -211,46 +211,42 @@ static int update(UPDATE_FUNC_ARGS)
 			auto r = pmap[ny][nx];
 			if (!r) continue;
 
-			// Found ANY neighbor particle
-			if (debugCode < 200) debugCode = 200;
-
 			auto rt = TYP(r);
 			auto rID = ID(r);
 
-			// Found METL specifically
-			if (rt == PT_METL)
+			// Skip our own type (AMPR)
+			if (rt == PT_AMPR) continue;
+
+			// Record the type number (multiply by 100 to show as XX.XXX)
+			// PT_METL should be around 4, PT_SPRK around 15
+			if (foundType == 0)
 			{
-				if (debugCode < 300) debugCode = 300;
+				foundType = rt * 100;  // Show type as 00.X00
 			}
 
 			// Check for PT_SPRK (active spark)
 			if (rt == PT_SPRK)
 			{
-				debugCode = 400;  // Found spark!
 				foundSpark = true;
-				parts[i].tmp += 5000;  // Big jump
-				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
+				parts[i].tmp = 50000 + rt * 100;  // 50.XXX shows spark + type
 			}
 			// Check for conductor with life > 0 (refractory)
-			else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN)
-			         && parts[rID].life > 0)
+			else if (parts[rID].life > 0)
 			{
-				if (debugCode < 350) debugCode = 350;
 				foundSpark = true;
-				parts[i].tmp += 2000;
-				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
+				parts[i].tmp = 30000 + rt * 100;  // 30.XXX shows refractory + type
 			}
 		}
 	}
 
-	// Set minimum to debug code
-	if (parts[i].tmp < debugCode)
-		parts[i].tmp = debugCode;
-
-	// Slow decay
-	if (!foundSpark && parts[i].life % 10 == 0)
+	// Show found type as base display if no spark
+	if (!foundSpark && foundType > 0)
 	{
-		parts[i].tmp = parts[i].tmp * 8 / 10;
+		parts[i].tmp = foundType;  // Shows 00.X00 where X is type/10
+	}
+	else if (!foundSpark)
+	{
+		parts[i].tmp = 1;  // No non-AMPR neighbors found
 	}
 
 	// Propagate spark
