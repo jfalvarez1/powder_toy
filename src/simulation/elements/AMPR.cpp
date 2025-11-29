@@ -162,10 +162,6 @@ void Element::Element_AMPR()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	// DEBUG: Always set a minimum value so we know update is running
-	if (parts[i].tmp < 100)
-		parts[i].tmp = 100;  // Show at least 00.100 mA to prove update runs
-
 	// Find cluster bounds (only do this periodically)
 	if (parts[i].life % 10 == 0)
 	{
@@ -196,7 +192,9 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// Simple spark detection - check ALL 8 neighbors for any spark activity
+	// DEBUG: Check what we can see in neighbors
+	// Display codes: 100=base, 200=found any neighbor, 300=found METL, 350=refractory, 400=SPRK
+	int debugCode = 100;
 	bool foundSpark = false;
 
 	for (int rx = -1; rx <= 1; rx++)
@@ -213,35 +211,49 @@ static int update(UPDATE_FUNC_ARGS)
 			auto r = pmap[ny][nx];
 			if (!r) continue;
 
+			// Found ANY neighbor particle
+			if (debugCode < 200) debugCode = 200;
+
 			auto rt = TYP(r);
 			auto rID = ID(r);
+
+			// Found METL specifically
+			if (rt == PT_METL)
+			{
+				if (debugCode < 300) debugCode = 300;
+			}
 
 			// Check for PT_SPRK (active spark)
 			if (rt == PT_SPRK)
 			{
+				debugCode = 400;  // Found spark!
 				foundSpark = true;
-				// Immediately boost tmp when spark detected (direct feedback)
-				parts[i].tmp += 1000;  // Add 1mA worth
+				parts[i].tmp += 5000;  // Big jump
 				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
 			}
-			// Check for conductor with life > 0 (refractory = just sparked)
+			// Check for conductor with life > 0 (refractory)
 			else if ((rt == PT_METL || rt == PT_INWR || rt == PT_PSCN || rt == PT_NSCN)
 			         && parts[rID].life > 0)
 			{
+				if (debugCode < 350) debugCode = 350;
 				foundSpark = true;
-				parts[i].tmp += 500;  // Add 0.5mA worth
+				parts[i].tmp += 2000;
 				if (parts[i].tmp > 99999) parts[i].tmp = 99999;
 			}
 		}
 	}
 
-	// Decay the reading slowly when no spark detected
-	if (!foundSpark && parts[i].life % 5 == 0)
+	// Set minimum to debug code
+	if (parts[i].tmp < debugCode)
+		parts[i].tmp = debugCode;
+
+	// Slow decay
+	if (!foundSpark && parts[i].life % 10 == 0)
 	{
-		parts[i].tmp = parts[i].tmp * 9 / 10;  // Decay by 10%
+		parts[i].tmp = parts[i].tmp * 8 / 10;
 	}
 
-	// Propagate spark through cluster if detected
+	// Propagate spark
 	if (foundSpark)
 	{
 		propagateSparkThroughCluster(sim, x, y);
