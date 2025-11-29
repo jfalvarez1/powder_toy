@@ -150,8 +150,8 @@ All electronic components use a **wire-type terminal identification** system:
 
 | Element | Description |
 | ------- | ----------- |
-| **VOLT** | Voltmeter. Measures voltage from nearby VCCS or spark intensity. Color: Green=low, Yellow=medium, Red=high. |
-| **AMPR** | Ammeter. Measures current flow (sparks/sec). Conducts electricity. Color: Blue=low, Cyan=medium, White=high. |
+| **VOLT** | Voltmeter with 7-segment display. Draw a 33x7 pixel rectangle for best display. Shows "XX.XXX V" format with 3 decimal places. Green LCD style. |
+| **AMPR** | Ammeter with 7-segment display. Draw a 38x7 pixel rectangle for best display. Shows "XX.XXX mA" format. Cyan LCD style. Conducts electricity. |
 | **PROB** | Oscilloscope Probe. Place next to signal source or connect via wire. Use Property Tool (P key) to set `tmp`=channel (0-3 for different colors). Signal propagates through connected probes instantly. |
 | **OSCI** | Oscilloscope Display. Draw a horizontal row for 1D time trace, or a grid for 2D waveform display. Place PROB nearby - auto-detects within 10 pixels. |
 
