@@ -192,8 +192,10 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Count AMPR vs non-AMPR neighbors
+	// DEBUG: Count ALL neighbors and empty slots
 	bool foundSpark = false;
+	int totalInPmap = 0;  // Total neighbors found in pmap
+	int emptySlots = 0;   // Neighbor positions with nothing in pmap
 	int amprCount = 0;
 	int otherCount = 0;
 	int otherType = 0;
@@ -207,11 +209,19 @@ static int update(UPDATE_FUNC_ARGS)
 			int nx = x + rx;
 			int ny = y + ry;
 			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES)
+			{
+				emptySlots++;
 				continue;
+			}
 
 			auto r = pmap[ny][nx];
-			if (!r) continue;
+			if (!r)
+			{
+				emptySlots++;
+				continue;
+			}
 
+			totalInPmap++;
 			auto rt = TYP(r);
 
 			if (rt == PT_AMPR)
@@ -232,12 +242,13 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	// Display: AA.OOT = AMPR count, Other count, Other type (mod 10)
-	// Interior: 08.000 (8 AMPR, 0 other)
-	// Edge with METL: 05.037 (5 AMPR, 3 other, type 7)
+	// Display: TE.AOO where T=total, E=empty, A=ampr, OO=other count*10+type%10
+	// Interior: 80.800 (8 total, 0 empty, 8 AMPR, 0 other)
+	// Edge of cluster: 53.530 (5 total, 3 empty, 5 AMPR, 3 other type 0=none)
+	// Edge with METL: 80.537 (8 total, 0 empty, 5 AMPR, 3 other type 7)
 	if (!foundSpark)
 	{
-		parts[i].tmp = amprCount * 1000 + otherCount * 10 + (otherType % 10);
+		parts[i].tmp = totalInPmap * 10000 + emptySlots * 1000 + amprCount * 100 + otherCount * 10 + (otherType % 10);
 	}
 
 	// Propagate spark
