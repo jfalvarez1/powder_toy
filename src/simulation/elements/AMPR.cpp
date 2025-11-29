@@ -192,10 +192,11 @@ static int update(UPDATE_FUNC_ARGS)
 
 	parts[i].life++;
 
-	// DEBUG: Show ALL neighbors including AMPR - don't skip anything
+	// DEBUG: Count AMPR vs non-AMPR neighbors
 	bool foundSpark = false;
-	int neighborCount = 0;
-	int firstType = 999;  // Will show 999 if no neighbors at all
+	int amprCount = 0;
+	int otherCount = 0;
+	int otherType = 0;
 
 	for (int rx = -1; rx <= 1; rx++)
 	{
@@ -212,12 +213,17 @@ static int update(UPDATE_FUNC_ARGS)
 			if (!r) continue;
 
 			auto rt = TYP(r);
-			neighborCount++;
 
-			// Record first neighbor type found
-			if (firstType == 999) firstType = rt;
+			if (rt == PT_AMPR)
+			{
+				amprCount++;
+			}
+			else
+			{
+				otherCount++;
+				otherType = rt;
+			}
 
-			// Check for PT_SPRK
 			if (rt == PT_SPRK)
 			{
 				foundSpark = true;
@@ -226,12 +232,12 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	// Display format: CC.TTT where CC = neighbor count, TTT = first type found
-	// e.g., 8 neighbors with first type 5 = 08.005
-	// If no neighbors: 00.999
+	// Display: AA.OOT = AMPR count, Other count, Other type (mod 10)
+	// Interior: 08.000 (8 AMPR, 0 other)
+	// Edge with METL: 05.037 (5 AMPR, 3 other, type 7)
 	if (!foundSpark)
 	{
-		parts[i].tmp = neighborCount * 1000 + firstType;
+		parts[i].tmp = amprCount * 1000 + otherCount * 10 + (otherType % 10);
 	}
 
 	// Propagate spark
